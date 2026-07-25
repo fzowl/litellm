@@ -142,6 +142,7 @@ class TestVoyageContextualEmbeddings:
 
         # Test contextual model detection
         assert config.is_contextualized_embeddings("voyage-context-3") is True
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
         assert config.is_contextualized_embeddings("voyage-context-2") is True
         assert config.is_contextualized_embeddings("context-model") is True
 
@@ -197,6 +198,27 @@ class TestVoyageContextualEmbeddings:
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
+
+    def test_contextual_embedding_request_string_normalization(self):
+        """A bare string input is normalized to a List[str] for the API"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello world", {}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello world"]
+        assert transformed["model"] == "voyage-context-4"
+
+        # List[str] is passed through unchanged
+        transformed_list = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
+        assert transformed_list["inputs"] == ["Hello", "world"]
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
