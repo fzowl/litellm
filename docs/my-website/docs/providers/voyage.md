@@ -57,6 +57,7 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-4-large          | `embedding(model="voyage/voyage-4-large", input)`          | 
 | voyage-4                | `embedding(model="voyage/voyage-4", input)`                | 
 | voyage-4-lite           | `embedding(model="voyage/voyage-4-lite", input)`           | 
+| voyage-4-nano           | `embedding(model="voyage/voyage-4-nano", input)`           | 
 | voyage-3.5              | `embedding(model="voyage/voyage-3.5", input)`              | 
 | voyage-3.5-lite         | `embedding(model="voyage/voyage-3.5-lite", input)`         | 
 | voyage-3-large          | `embedding(model="voyage/voyage-3-large", input)`          | 
@@ -155,6 +156,7 @@ response = embedding(
 | voyage-4-large | Best overall quality (latest) | 32K | $0.12 |
 | voyage-4 | General-purpose (latest) | 32K | $0.06 |
 | voyage-4-lite | Latency-sensitive (latest) | 32K | $0.02 |
+| voyage-4-nano | Smallest, open-weight (latest) | 32K | — |
 | voyage-3.5 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-3.5-lite | Latency-sensitive applications | 32K | $0.02 |
 | voyage-3-large | Best overall quality | 32K | $0.18 |
