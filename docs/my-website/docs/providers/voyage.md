@@ -54,6 +54,13 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 
 | Model Name              | Function Call                                              |
 |-------------------------|------------------------------------------------------------|
+| voyage-4-large          | `embedding(model="voyage/voyage-4-large", input)`          | 
+| voyage-4                | `embedding(model="voyage/voyage-4", input)`                | 
+| voyage-4-lite           | `embedding(model="voyage/voyage-4-lite", input)`           | 
+| voyage-context-4        | `embedding(model="voyage/voyage-context-4", input)`        | 
+| voyage-context-3        | `embedding(model="voyage/voyage-context-3", input)`        | 
+| voyage-multimodal-3.5   | `embedding(model="voyage/voyage-multimodal-3.5", input)`   | 
+| voyage-multimodal-3     | `embedding(model="voyage/voyage-multimodal-3", input)`     | 
 | voyage-3.5              | `embedding(model="voyage/voyage-3.5", input)`              | 
 | voyage-3.5-lite         | `embedding(model="voyage/voyage-3.5-lite", input)`         | 
 | voyage-3-large          | `embedding(model="voyage/voyage-3-large", input)`          | 
@@ -72,9 +79,9 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01          | `embedding(model="voyage/voyage-lite-01", input)`          |
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` |
 
-## Contextual Embeddings (voyage-context-3)
+## Contextual Embeddings (voyage-context-4)
 
-VoyageAI's `voyage-context-3` model provides contextualized chunk embeddings, where each chunk is embedded with awareness of its surrounding document context. This significantly improves retrieval quality compared to standard context-agnostic embeddings.
+VoyageAI's contextualized chunk embedding models (`voyage-context-4`, and the previous generation `voyage-context-3`) embed each chunk with awareness of its surrounding document context. This significantly improves retrieval quality compared to standard context-agnostic embeddings. `voyage-context-4` is the latest and recommended model.
 
 ### Key Benefits
 - Chunks understand their position and role within the full document
@@ -117,17 +124,17 @@ print(f"Processed {len(response.data)} documents")
 ```
 
 ### Specifications
-- Model: `voyage-context-3`
-- Context length: 32,000 tokens per document
+- Models: `voyage-context-4` (latest), `voyage-context-3`
+- Per-chunk context window: 32,000 tokens
 - Output dimensions: 256, 512, 1024 (default), or 2048
 - Max inputs: 1,000 per request
 - Max total tokens: 120,000
 - Max chunks: 16,000
-- Pricing: $0.18 per million tokens
+- Pricing: `voyage-context-4` $0.12 / `voyage-context-3` $0.18 per million tokens
 
 ### When to Use Contextual Embeddings
 
-**Use `voyage-context-3` when:**
+**Use `voyage-context-4` (or `voyage-context-3`) when:**
 - Processing long documents split into chunks
 - Document structure and flow are important
 - References between sections matter
@@ -143,13 +150,18 @@ print(f"Processed {len(response.data)} documents")
 
 | Model | Best For | Context Length | Price/M Tokens |
 |-------|----------|----------------|----------------|
+| voyage-4-large | Best overall quality | 32K | $0.12 |
+| voyage-4 | General-purpose | 32K | $0.06 |
+| voyage-4-lite | Latency-sensitive applications | 32K | $0.02 |
+| voyage-context-4 | Contextual document embeddings (latest) | 120K | $0.12 |
+| voyage-context-3 | Contextual document embeddings | 120K | $0.18 |
+| voyage-multimodal-3.5 | Multimodal (text + images) | 32K | $0.12 |
 | voyage-3.5 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-3.5-lite | Latency-sensitive applications | 32K | $0.02 |
 | voyage-3-large | Best overall quality | 32K | $0.18 |
 | voyage-code-3 | Code retrieval and search | 32K | $0.18 |
 | voyage-finance-2 | Financial documents | 32K | $0.12 |
 | voyage-law-2 | Legal documents | 16K | $0.12 |
-| voyage-context-3 | Contextual document embeddings | 32K | $0.18 |
 
 ## Rerank
 

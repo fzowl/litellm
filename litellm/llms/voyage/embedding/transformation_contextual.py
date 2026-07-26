@@ -98,6 +98,26 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    @staticmethod
+    def _transform_input(
+        input: Union[AllEmbeddingInputValues, List[List[str]]],
+    ) -> List[List[str]]:
+        """
+        The Voyage contextualized embeddings API expects `inputs` to be a
+        list of lists of strings (``list[list[str]]``) - each inner
+        ``list[str]`` is a single document made up of ordered chunks.
+
+        Callers may pass a plain string or a flat ``list[str]`` (the regular
+        embeddings input shape). Normalize those into ``list[list[str]]`` so
+        the API is always called with ``list[str]`` groups.
+        """
+        if isinstance(input, str):
+            return [[input]]
+        if isinstance(input, list) and all(isinstance(i, str) for i in input):
+            # flat list[str] -> a single document of chunks
+            return [input]  # type: ignore[list-item]
+        return input  # type: ignore[return-value]
+
     def transform_embedding_request(
         self,
         model: str,
@@ -106,7 +126,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._transform_input(input),
             "model": model,
             **optional_params,
         }
