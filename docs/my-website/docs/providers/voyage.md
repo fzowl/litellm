@@ -88,7 +88,7 @@ VoyageAI's `voyage-context-4` (latest) and `voyage-context-3` models provide con
 
 ### Usage
 
-Contextual embeddings accept a **nested input format** (`List[List[str]]`) where each inner list represents chunks from a single document. A flat `List[str]` is also accepted:
+Contextual embeddings use a **nested input format** (`List[List[str]]`) where each inner list represents chunks from a single document. LiteLLM also accepts a bare string or a flat `List[str]` and normalizes them to this shape (a single document) before calling the API:
 
 ```python
 from litellm import embedding
@@ -119,10 +119,10 @@ response = embedding(
 )
 print(f"Processed {len(response.data)} documents")
 
-# Flat List[str] input is also supported
+# A flat List[str] is treated as the chunks of a single document
 response = embedding(
     model="voyage/voyage-context-4",
-    input=["Paris is the capital of France.", "Tokyo is the capital of Japan."]
+    input=["Paris is the capital of France.", "It is known for the Eiffel Tower."]
 )
 ```
 

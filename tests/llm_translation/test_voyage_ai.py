@@ -199,26 +199,33 @@ class TestVoyageContextualEmbeddings:
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
 
-    def test_contextual_embedding_request_string_normalization(self):
-        """A bare string input is normalized to a List[str] for the API"""
+    def test_contextual_embedding_request_input_normalization(self):
+        """Simpler inputs are normalized to List[List[str]] for the API"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
 
         config = VoyageContextualEmbeddingConfig()
 
+        # A bare string becomes a single document with a single chunk
         transformed = config.transform_embedding_request(
             "voyage-context-4", "Hello world", {}, {}
         )
-
-        assert transformed["inputs"] == ["Hello world"]
+        assert transformed["inputs"] == [["Hello world"]]
         assert transformed["model"] == "voyage-context-4"
 
-        # List[str] is passed through unchanged
+        # A flat List[str] becomes the chunks of a single document
         transformed_list = config.transform_embedding_request(
             "voyage-context-4", ["Hello", "world"], {}, {}
         )
-        assert transformed_list["inputs"] == ["Hello", "world"]
+        assert transformed_list["inputs"] == [["Hello", "world"]]
+
+        # A List[List[str]] is passed through unchanged
+        nested = [["a", "b"], ["c"]]
+        transformed_nested = config.transform_embedding_request(
+            "voyage-context-4", nested, {}, {}
+        )
+        assert transformed_nested["inputs"] == nested
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
