@@ -105,8 +105,15 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        # Voyage contextualized embeddings API accepts `inputs` as a list[str]
+        # (a single document's chunks). Pass list[list[str]] through unchanged
+        # only when the caller already provided that nested shape.
+        if isinstance(input, str):
+            inputs: Union[List[str], List[List[str]]] = [input]
+        else:
+            inputs = input
         return {
-            "inputs": input,
+            "inputs": inputs,
             "model": model,
             **optional_params,
         }
