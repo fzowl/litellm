@@ -444,6 +444,7 @@ class TestVoyageModelPrices:
             ("voyage/voyage-4-lite", 2e-08, 32000),
             ("voyage/voyage-4-nano", 0.0, 32000),
             ("voyage/voyage-context-4", 1.2e-07, 120000),
+            ("voyage/voyage-multimodal-3.5", 1.2e-07, 32000),
         ],
     )
     def test_voyage_model_registered(self, model, input_cost, max_tokens):
