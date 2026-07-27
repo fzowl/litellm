@@ -106,10 +106,32 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._normalize_inputs(input),
             "model": model,
             **optional_params,
         }
+
+    @staticmethod
+    def _normalize_inputs(
+        input: Union[AllEmbeddingInputValues, List[List[str]]],
+    ) -> List[List[str]]:
+        """
+        The Voyage contextualized embeddings API expects ``inputs`` to be a
+        list of documents, where each document is a ``list[str]`` of chunks.
+
+        Normalize the OpenAI-style embedding input so every element is a
+        ``list[str]``:
+          - ``"text"``            -> ``[["text"]]``
+          - ``["a", "b"]``        -> ``[["a", "b"]]``  (one document, two chunks)
+          - ``[["a", "b"], ...]`` -> unchanged         (already list[list[str]])
+        """
+        if isinstance(input, str):
+            return [[input]]
+        if isinstance(input, list):
+            if all(isinstance(item, str) for item in input):
+                return [input]  # flat list[str] == single document of chunks
+            return input  # already list[list[str]]
+        return input
 
     def transform_embedding_response(
         self,
