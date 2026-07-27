@@ -98,6 +98,31 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    @staticmethod
+    def _transform_input_to_nested_list(
+        input: Union[AllEmbeddingInputValues, List[List[str]]],
+    ) -> List[List[str]]:
+        """
+        The Voyage contextualized embeddings API expects ``inputs`` to be a
+        list of lists of strings (``List[List[str]]``) - each inner list holds
+        a query, a document, or the chunks of a document.
+
+        Normalize the OpenAI-style ``input`` so we always call the API with
+        ``list[str]`` inner elements:
+        - ``"text"``               -> ``[["text"]]``
+        - ``["a", "b"]``           -> ``[["a", "b"]]``
+        - ``[["a", "b"], ["c"]]``  -> unchanged
+        """
+        if isinstance(input, str):
+            return [[input]]
+        if isinstance(input, list):
+            if len(input) > 0 and all(isinstance(item, str) for item in input):
+                # flat list[str] -> single group of chunks
+                return [input]  # type: ignore[list-item]
+            # already list[list[str]] (or empty) - pass through
+            return input  # type: ignore[return-value]
+        return input  # type: ignore[return-value]
+
     def transform_embedding_request(
         self,
         model: str,
@@ -106,7 +131,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._transform_input_to_nested_list(input),
             "model": model,
             **optional_params,
         }

@@ -150,6 +150,46 @@ class TestVoyageContextualEmbeddings:
         assert config.is_contextualized_embeddings("voyage-2") is False
         assert config.is_contextualized_embeddings("regular-model") is False
 
+    def test_contextual_embedding_model_detection_context_4(self):
+        """voyage-context-4 must be routed to the contextual config"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
+        assert config.is_contextualized_embeddings("voyage/voyage-context-4") is True
+
+    def test_contextual_embedding_input_normalized_to_nested_list(self):
+        """
+        The contextual API requires list[list[str]]. A plain string or a flat
+        list[str] must be wrapped so the API is always called with list[str].
+        """
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        # str -> [[str]]
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {}, {}
+        )
+        assert transformed["inputs"] == [["Hello"]]
+
+        # flat list[str] -> single group of chunks
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
+        assert transformed["inputs"] == [["Hello", "world"]]
+
+        # already list[list[str]] -> unchanged
+        nested = [["Hello", "world"], ["Test"]]
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", nested, {}, {}
+        )
+        assert transformed["inputs"] == nested
+
     def test_contextual_embedding_url_generation(self):
         """Test URL generation for contextual embeddings"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
