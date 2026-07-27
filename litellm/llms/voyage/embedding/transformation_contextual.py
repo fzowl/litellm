@@ -98,6 +98,30 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    @staticmethod
+    def _normalize_inputs(
+        input: Union[AllEmbeddingInputValues, List[List[str]]]
+    ) -> List[List[str]]:
+        """
+        The Voyage contextualized embeddings API expects ``inputs`` to be a
+        list of lists of strings (``List[List[str]]``) - each inner list is a
+        group of related chunks that share context.
+
+        OpenAI-style embedding input can be a plain string or a flat list of
+        strings, so normalize those shapes into the nested structure the API
+        requires while leaving already-nested input untouched.
+        """
+        # A single string -> one group with one chunk.
+        if isinstance(input, str):
+            return [[input]]
+
+        # A flat list of strings -> one group containing those chunks.
+        if isinstance(input, list) and all(isinstance(i, str) for i in input):
+            return [input]  # type: ignore[list-item]
+
+        # Already List[List[str]] (or empty) -> pass through unchanged.
+        return input  # type: ignore[return-value]
+
     def transform_embedding_request(
         self,
         model: str,
@@ -106,7 +130,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._normalize_inputs(input),
             "model": model,
             **optional_params,
         }
