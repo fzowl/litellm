@@ -431,3 +431,27 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+class TestVoyageModelPrices:
+    """Ensure newly added Voyage models are registered with correct pricing"""
+
+    @pytest.mark.parametrize(
+        "model, input_cost, max_tokens",
+        [
+            ("voyage/voyage-4", 6e-08, 32000),
+            ("voyage/voyage-4-large", 1.2e-07, 32000),
+            ("voyage/voyage-4-lite", 2e-08, 32000),
+            ("voyage/voyage-4-nano", 0.0, 32000),
+            ("voyage/voyage-context-4", 1.2e-07, 120000),
+        ],
+    )
+    def test_voyage_model_registered(self, model, input_cost, max_tokens):
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        info = litellm.get_model_info(model)
+        assert info["litellm_provider"] == "voyage"
+        assert info["mode"] == "embedding"
+        assert info["input_cost_per_token"] == input_cost
+        assert info["max_input_tokens"] == max_tokens
