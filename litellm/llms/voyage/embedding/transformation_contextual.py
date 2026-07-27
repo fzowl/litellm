@@ -106,10 +106,25 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._normalize_inputs(input),
             "model": model,
             **optional_params,
         }
+
+    @staticmethod
+    def _normalize_inputs(
+        input: Union[AllEmbeddingInputValues, List[List[str]]]
+    ) -> Union[List[str], List[List[str]]]:
+        """
+        The Voyage contextualized embeddings API expects ``inputs`` to be a
+        ``list[str]`` (or ``list[list[str]]`` for pre-chunked documents).
+
+        A single string is wrapped into a ``list[str]`` so we always call the
+        API with a list. Existing list inputs are passed through unchanged.
+        """
+        if isinstance(input, str):
+            return [input]
+        return input
 
     def transform_embedding_response(
         self,
