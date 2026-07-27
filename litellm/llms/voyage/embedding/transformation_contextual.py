@@ -105,8 +105,16 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        # Voyage contextualized embeddings API expects `inputs` to be a list of
+        # strings (auto-chunking) or a list of list of strings (pre-chunked docs).
+        # A bare string is wrapped into a list[str] so we always call the API
+        # with at least a list of strings.
+        if isinstance(input, str):
+            inputs: Union[AllEmbeddingInputValues, List[List[str]]] = [input]
+        else:
+            inputs = input
         return {
-            "inputs": input,
+            "inputs": inputs,
             "model": model,
             **optional_params,
         }
