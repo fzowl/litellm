@@ -141,6 +141,7 @@ class TestVoyageContextualEmbeddings:
         config = VoyageContextualEmbeddingConfig()
 
         # Test contextual model detection
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
         assert config.is_contextualized_embeddings("voyage-context-3") is True
         assert config.is_contextualized_embeddings("voyage-context-2") is True
         assert config.is_contextualized_embeddings("context-model") is True
@@ -197,6 +198,29 @@ class TestVoyageContextualEmbeddings:
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
+
+    def test_contextual_embedding_input_normalization(self):
+        """Contextual API must always be called with list[list[str]]"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        # A single string becomes one document with one chunk
+        assert config.transform_embedding_request(
+            "voyage-context-4", "hello", {}, {}
+        )["inputs"] == [["hello"]]
+
+        # A flat list[str] becomes one document with multiple chunks
+        assert config.transform_embedding_request(
+            "voyage-context-4", ["a", "b"], {}, {}
+        )["inputs"] == [["a", "b"]]
+
+        # Already-nested list[list[str]] is passed through unchanged
+        assert config.transform_embedding_request(
+            "voyage-context-4", [["a", "b"], ["c"]], {}, {}
+        )["inputs"] == [["a", "b"], ["c"]]
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
