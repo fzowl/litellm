@@ -157,7 +157,7 @@ print(f"Processed {len(response.data)} documents")
 | voyage-4 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-4-lite | Latency-sensitive applications | 32K | $0.02 |
 | voyage-4-nano | Free, open-weight | 32K | $0.00 |
-| voyage-context-4 | Contextual document embeddings | 32K | $0.18 |
+| voyage-context-4 | Contextual document embeddings | 32K | $0.12 |
 | voyage-context-3 | Contextual document embeddings | 32K | $0.18 |
 
 ## Rerank
