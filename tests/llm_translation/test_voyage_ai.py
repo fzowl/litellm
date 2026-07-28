@@ -71,6 +71,26 @@ class TestVoyageAI(BaseLLMEmbeddingTest):
                 assert response.usage.total_tokens > 0
 
 
+@pytest.mark.parametrize(
+    "model, expected_cost, expected_max_tokens",
+    [
+        ("voyage/voyage-context-4", 1.2e-07, 120000),
+        ("voyage/voyage-4", 6e-08, 32000),
+        ("voyage/voyage-4-large", 1.2e-07, 32000),
+        ("voyage/voyage-4-lite", 2e-08, 32000),
+        ("voyage/voyage-4-nano", 0.0, 32000),
+    ],
+)
+def test_voyage_new_models_in_cost_map(model, expected_cost, expected_max_tokens):
+    """New Voyage models must be registered with the correct pricing"""
+    assert model in litellm.model_cost
+    info = litellm.model_cost[model]
+    assert info["litellm_provider"] == "voyage"
+    assert info["mode"] == "embedding"
+    assert info["input_cost_per_token"] == expected_cost
+    assert info["max_input_tokens"] == expected_max_tokens
+
+
 def test_voyage_ai_embedding_extra_params():
     """Test Voyage AI embedding with extra parameters"""
     try:
@@ -142,6 +162,7 @@ class TestVoyageContextualEmbeddings:
 
         # Test contextual model detection
         assert config.is_contextualized_embeddings("voyage-context-3") is True
+        assert config.is_contextualized_embeddings("voyage-context-4") is True
         assert config.is_contextualized_embeddings("voyage-context-2") is True
         assert config.is_contextualized_embeddings("context-model") is True
 
@@ -197,6 +218,27 @@ class TestVoyageContextualEmbeddings:
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
+
+    def test_contextual_embedding_request_string_normalization(self):
+        """A bare string input must be normalized to list[str] for the API"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello world", {}, {}
+        )
+
+        assert transformed["inputs"] == ["Hello world"]
+        assert transformed["model"] == "voyage-context-4"
+
+        # Existing list inputs are passed through unchanged
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
+        assert transformed["inputs"] == ["Hello", "world"]
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
