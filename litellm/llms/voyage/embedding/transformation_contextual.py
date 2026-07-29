@@ -124,7 +124,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     @staticmethod
     def _transform_input(
         input: Union[AllEmbeddingInputValues, List[List[str]]],
-    ) -> Union[List[str], List[List[str]]]:
+    ) -> Union[AllEmbeddingInputValues, List[List[str]]]:
         """
         Normalize ``input`` to the shape the Voyage contextual ``inputs`` field
         expects, *preferring the flat* ``List[str]`` form and only keeping the
@@ -147,7 +147,7 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
 
     @staticmethod
     def _needs_auto_chunking(
-        inputs: Union[List[str], List[List[str]]],
+        inputs: Union[AllEmbeddingInputValues, List[List[str]]],
         input_type: Optional[str],
     ) -> bool:
         """

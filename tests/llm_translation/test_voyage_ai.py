@@ -348,7 +348,7 @@ class TestVoyageContextualEmbeddings:
         assert mapped["encoding_format"] == "float"
         assert mapped["output_dimension"] == 512
 
-    def test_contextual_embedding_environment_validation(self):
+    def test_contextual_embedding_environment_validation(self, monkeypatch):
         """Test environment validation for contextual embeddings"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
@@ -356,8 +356,9 @@ class TestVoyageContextualEmbeddings:
 
         config = VoyageContextualEmbeddingConfig()
 
-        # Test with API key in environment
-        os.environ["VOYAGE_API_KEY"] = "test-key"
+        # Test with API key in environment. Use monkeypatch so the real
+        # VOYAGE_API_KEY (used by the live e2e tests) is restored afterwards.
+        monkeypatch.setenv("VOYAGE_API_KEY", "test-key")
 
         headers = config.validate_environment({}, "voyage-context-3", [], {}, {})
         assert headers["Authorization"] == "Bearer test-key"
@@ -538,3 +539,83 @@ def test_voyage_4_nano_in_cost_map_free():
     assert entry["mode"] == "embedding"
     assert entry["input_cost_per_token"] == 0.0
     assert entry["output_cost_per_token"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# End-to-end integration tests (hit the real Voyage API).
+#
+# These are skipped unless ``VOYAGE_API_KEY`` is set, so CI without the secret
+# still passes. Run locally with:
+#     VOYAGE_API_KEY=... pytest tests/llm_translation/test_voyage_ai.py -k e2e
+# ---------------------------------------------------------------------------
+
+
+def _ctx_embedding(item):
+    """Extract the first chunk embedding from a contextual response entry.
+
+    The contextual ``/contextualizedembeddings`` endpoint returns one entry per
+    document, each nested as ``{"object": "list", "data": [{"embedding": [...]}]}``.
+    """
+    return item["data"][0]["embedding"]
+
+
+@pytest.mark.skipif(
+    not os.getenv("VOYAGE_API_KEY"),
+    reason="VOYAGE_API_KEY not set; skipping live Voyage API e2e tests",
+)
+class TestVoyageE2E:
+    """Live integration tests against the Voyage API."""
+
+    def test_e2e_context_4_flat_list(self):
+        """voyage-context-4 with a flat List[str] (the preferred/spec path)."""
+        response = litellm.embedding(
+            model="voyage/voyage-context-4",
+            input=["The quick brown fox", "jumps over the lazy dog"],
+        )
+        assert response.model == "voyage-context-4"
+        assert len(response.data) == 2  # one entry per input
+        emb = _ctx_embedding(response.data[0])
+        assert isinstance(emb, list) and len(emb) > 0
+        assert response.usage.total_tokens > 0
+
+    def test_e2e_context_4_single_string(self):
+        """voyage-context-4 with a plain string input."""
+        response = litellm.embedding(
+            model="voyage/voyage-context-4",
+            input="Hello world",
+        )
+        assert len(response.data) == 1
+        assert len(_ctx_embedding(response.data[0])) > 0
+
+    def test_e2e_context_4_nested_chunks(self):
+        """voyage-context-4 with pre-grouped List[List[str]] chunks."""
+        response = litellm.embedding(
+            model="voyage/voyage-context-4",
+            input=[["chunk one", "chunk two"], ["doc two chunk"]],
+        )
+        assert len(response.data) == 2  # two documents
+        assert len(response.data[0]["data"]) == 2  # doc one has two chunks
+
+    def test_e2e_context_4_query_input_type(self):
+        """voyage-context-4 query input passes a flat list through directly."""
+        response = litellm.embedding(
+            model="voyage/voyage-context-4",
+            input=["what is the capital of France?"],
+            input_type="query",
+        )
+        assert len(response.data) == 1
+        assert len(_ctx_embedding(response.data[0])) > 0
+
+    @pytest.mark.parametrize(
+        "model",
+        ["voyage/voyage-4", "voyage/voyage-4-large", "voyage/voyage-4-lite"],
+    )
+    def test_e2e_voyage_4_family(self, model):
+        """voyage-4 family routes to the standard /embeddings endpoint."""
+        response = litellm.embedding(
+            model=model,
+            input=["hello world", "second text"],
+        )
+        assert len(response.data) == 2
+        assert len(response.data[0]["embedding"]) > 0
+        assert response.usage.total_tokens > 0
