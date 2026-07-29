@@ -253,20 +253,6 @@ class TestVoyageContextualEmbeddings:
             is False
         )
 
-
-def test_voyage_new_models_in_cost_map():
-    """New Voyage models are registered in the litellm cost map."""
-    for model in [
-        "voyage/voyage-context-4",
-        "voyage/voyage-4",
-        "voyage/voyage-4-large",
-        "voyage/voyage-4-lite",
-        "voyage/voyage-4-nano",
-        "voyage/voyage-multimodal-3.5",
-    ]:
-        assert model in litellm.model_cost, f"{model} missing from model_cost"
-        assert litellm.model_cost[model]["litellm_provider"] == "voyage"
-
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
@@ -500,3 +486,17 @@ def test_voyage_new_models_in_cost_map():
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+def test_voyage_new_models_in_cost_map():
+    """New Voyage models are registered in the litellm cost map."""
+    for model in [
+        "voyage/voyage-context-4",
+        "voyage/voyage-4",
+        "voyage/voyage-4-large",
+        "voyage/voyage-4-lite",
+        "voyage/voyage-4-nano",
+        "voyage/voyage-multimodal-3.5",
+    ]:
+        assert model in litellm.model_cost, f"{model} missing from model_cost"
+        assert litellm.model_cost[model]["litellm_provider"] == "voyage"
