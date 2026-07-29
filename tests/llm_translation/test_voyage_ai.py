@@ -200,9 +200,11 @@ class TestVoyageContextualEmbeddings:
 
     def test_contextual_embedding_input_normalization(self):
         """
-        Contextual embeddings should send List[str] to the Voyage API when
-        possible (depending on the input), and only fall back to
-        List[List[str]] when the caller already supplied nested groups.
+        The Voyage contextual endpoint expects ``inputs`` as a nested
+        List[List[str]] (one inner list per document). LiteLLM must normalize
+        the single-document convenience forms (a plain string, or a flat list
+        of chunks) into that nested shape, and forward an already-nested value
+        untouched.
         """
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
@@ -210,19 +212,19 @@ class TestVoyageContextualEmbeddings:
 
         config = VoyageContextualEmbeddingConfig()
 
-        # A single string -> wrapped into a List[str]
+        # A single string -> one document containing a single chunk
         transformed = config.transform_embedding_request(
             "voyage-context-4", "Hello", {}, {}
         )
-        assert transformed["inputs"] == ["Hello"]
+        assert transformed["inputs"] == [["Hello"]]
 
-        # A flat List[str] -> kept as List[str] (preferred shape)
+        # A flat List[str] (chunks of one document) -> wrapped into one document
         transformed = config.transform_embedding_request(
             "voyage-context-4", ["Hello", "world"], {}, {}
         )
-        assert transformed["inputs"] == ["Hello", "world"]
+        assert transformed["inputs"] == [["Hello", "world"]]
 
-        # An already-nested List[List[str]] -> kept as-is (fallback shape)
+        # An already-nested List[List[str]] -> kept as-is
         nested = [["Hello", "world"], ["Test"]]
         transformed = config.transform_embedding_request(
             "voyage-context-4", nested, {}, {}
@@ -489,14 +491,22 @@ class TestVoyageContextualEmbeddings:
 
 
 def test_voyage_new_models_in_cost_map():
-    """New Voyage models are registered in the litellm cost map."""
+    """New API-served Voyage models are registered in the litellm cost map."""
     for model in [
         "voyage/voyage-context-4",
         "voyage/voyage-4",
         "voyage/voyage-4-large",
         "voyage/voyage-4-lite",
-        "voyage/voyage-4-nano",
         "voyage/voyage-multimodal-3.5",
     ]:
         assert model in litellm.model_cost, f"{model} missing from model_cost"
         assert litellm.model_cost[model]["litellm_provider"] == "voyage"
+
+
+def test_voyage_4_nano_not_in_cost_map():
+    """
+    voyage-4-nano is an open-weight (Hugging Face) model, not served by the
+    Voyage API, so it must not appear as a phantom `voyage/` API endpoint in
+    the cost map.
+    """
+    assert "voyage/voyage-4-nano" not in litellm.model_cost

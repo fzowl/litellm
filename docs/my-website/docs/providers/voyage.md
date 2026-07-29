@@ -57,7 +57,6 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-4-large          | `embedding(model="voyage/voyage-4-large", input)`          | 
 | voyage-4                | `embedding(model="voyage/voyage-4", input)`                | 
 | voyage-4-lite           | `embedding(model="voyage/voyage-4-lite", input)`           | 
-| voyage-4-nano           | `embedding(model="voyage/voyage-4-nano", input)`           | 
 | voyage-3.5              | `embedding(model="voyage/voyage-3.5", input)`              | 
 | voyage-3.5-lite         | `embedding(model="voyage/voyage-3.5-lite", input)`         | 
 | voyage-3-large          | `embedding(model="voyage/voyage-3-large", input)`          | 
@@ -76,6 +75,10 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01          | `embedding(model="voyage/voyage-lite-01", input)`          |
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` |
 
+:::note Open-weight models
+`voyage-4-nano` is an **open-weight** model published on [Hugging Face](https://huggingface.co/voyageai) and is **not served by the Voyage API**. It is therefore not usable via `embedding(model="voyage/voyage-4-nano", ...)` and is intentionally not registered in the LiteLLM cost map. Run it through a self-hosted/HuggingFace embedding endpoint instead.
+:::
+
 ## Contextual Embeddings (voyage-context-4, voyage-context-3)
 
 VoyageAI's contextual models (`voyage-context-4`, `voyage-context-3`) provide contextualized chunk embeddings, where each chunk is embedded with awareness of its surrounding document context. This significantly improves retrieval quality compared to standard context-agnostic embeddings.
@@ -88,7 +91,15 @@ VoyageAI's contextual models (`voyage-context-4`, `voyage-context-3`) provide co
 
 ### Usage
 
-Contextual embeddings accept both a flat `List[str]` and a **nested** `List[List[str]]` input. LiteLLM sends a `List[str]` to the Voyage API when the input allows it (a plain string or a flat list of chunks) and only falls back to the nested `List[List[str]]` shape when you supply pre-grouped chunks — one inner list per document.
+The Voyage contextual endpoint expects the `inputs` field as a **nested** `List[List[str]]`, where each inner list holds the chunks of a *single* document so they are embedded in each other's context. LiteLLM accepts the flatter forms for convenience and normalizes them to that nested shape before calling the API:
+
+| You pass | LiteLLM sends |
+|----------|---------------|
+| `"Hello"` (a string) | `[["Hello"]]` |
+| `["chunk1", "chunk2"]` (flat list — chunks of one document) | `[["chunk1", "chunk2"]]` |
+| `[["c1", "c2"], ["d1"]]` (already nested — one list per document) | `[["c1", "c2"], ["d1"]]` (unchanged) |
+
+A flat `List[str]` is treated as the chunks of one document; to contextualize **multiple** documents, pass the nested `List[List[str]]` form yourself.
 
 ```python
 from litellm import embedding
@@ -96,7 +107,7 @@ import os
 
 os.environ['VOYAGE_API_KEY'] = "your-api-key"
 
-# Flat list of chunks (sent to the API as List[str])
+# Chunks of a single document (normalized to [["...", "...", "..."]])
 response = embedding(
     model="voyage/voyage-context-4",
     input=[
@@ -107,7 +118,7 @@ response = embedding(
 )
 print(f"Number of chunks: {len(response.data)}")
 
-# Multiple documents, each a group of chunks (sent as List[List[str]])
+# Multiple documents, each a group of chunks (sent as-is: List[List[str]])
 response = embedding(
     model="voyage/voyage-context-4",
     input=[
@@ -147,7 +158,6 @@ print(f"Processed {len(response.data)} documents")
 | voyage-4-large | Best overall quality | 32K | $0.12 |
 | voyage-4 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-4-lite | Latency-sensitive applications | 32K | $0.02 |
-| voyage-4-nano | Smallest, open-weight | 32K | $0.02 |
 | voyage-3.5 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-3.5-lite | Latency-sensitive applications | 32K | $0.02 |
 | voyage-3-large | Best overall quality | 32K | $0.18 |

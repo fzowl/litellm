@@ -114,32 +114,41 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
     @staticmethod
     def _transform_input(
         input: Union[AllEmbeddingInputValues, List[List[str]]]
-    ) -> List:
+    ) -> List[List]:
         """
-        Normalize the ``input`` into the shape expected by the Voyage
-        contextualized embeddings API (``inputs`` field).
+        Normalize ``input`` into the nested ``List[List[str]]`` shape required
+        by the Voyage contextualized embeddings API (``inputs`` field).
 
-        The Voyage contextual API accepts both ``List[str]`` and
-        ``List[List[str]]``. We prefer the flatter ``List[str]`` form when the
-        input allows it, and only fall back to ``List[List[str]]`` when the
-        caller already supplied nested groups of chunks.
+        The contextual endpoint groups the chunks that belong to the *same
+        document* into one inner list, so that "each chunk is encoded in the
+        context of the other chunks from the same document". By default (the
+        config sends neither ``input_type`` nor ``enable_auto_chunking``) a
+        *flat* ``List[str]`` document input is **not** valid — it would be
+        interpreted as one chunk per document instead of chunks of a single
+        document. So we always wrap single-document inputs into the nested
+        form and only forward an already-nested value untouched::
+
+            "Hello"                  -> [["Hello"]]
+            ["chunk1", "chunk2"]     -> [["chunk1", "chunk2"]]   # one document
+            [["c1", "c2"], ["d1"]]   -> [["c1", "c2"], ["d1"]]   # kept as-is
 
         Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
         """
-        # A single string -> single-element List[str]
+        # A single string -> one document containing a single chunk
         if isinstance(input, str):
-            return [input]
+            return [[input]]
 
-        # Empty / non-list input -> pass through unchanged
-        if not isinstance(input, list) or len(input) == 0:
+        # Non-list input -> wrap defensively so we always send the nested form
+        if not isinstance(input, list):
+            return [[input]]  # type: ignore[list-item]
+
+        # Already nested (List[List[...]]) -> valid shape, keep as-is.
+        # ``all`` is vacuously True for an empty list, which is forwarded as-is.
+        if all(isinstance(item, list) for item in input):
             return input  # type: ignore[return-value]
 
-        # Already nested (List[List[str]]) -> keep as-is (fallback shape)
-        if any(isinstance(item, list) for item in input):
-            return input
-
-        # Flat List[str] (or List[int] token ids) -> preferred shape, keep as-is
-        return input
+        # Flat List[str] (chunks of a single document) -> wrap into one document
+        return [input]  # type: ignore[list-item]
 
     def transform_embedding_response(
         self,
