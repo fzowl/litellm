@@ -105,50 +105,77 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        inputs, extra_params = self._transform_input(input, optional_params)
         return {
-            "inputs": self._transform_input(input),
+            "inputs": inputs,
             "model": model,
             **optional_params,
+            **extra_params,
         }
 
     @staticmethod
     def _transform_input(
-        input: Union[AllEmbeddingInputValues, List[List[str]]]
-    ) -> List[List]:
+        input: Union[AllEmbeddingInputValues, List[List[str]]],
+        optional_params: dict,
+    ) -> tuple:
         """
-        Normalize ``input`` into the nested ``List[List[str]]`` shape required
-        by the Voyage contextualized embeddings API (``inputs`` field).
+        Normalize ``input`` for the Voyage contextualized embeddings API
+        (``inputs`` field), *preferring the flat* ``List[str]`` form and only
+        falling back to nested ``List[List[str]]`` when the caller already
+        supplied pre-grouped chunks.
 
-        The contextual endpoint groups the chunks that belong to the *same
-        document* into one inner list, so that "each chunk is encoded in the
-        context of the other chunks from the same document". By default (the
-        config sends neither ``input_type`` nor ``enable_auto_chunking``) a
-        *flat* ``List[str]`` document input is **not** valid — it would be
-        interpreted as one chunk per document instead of chunks of a single
-        document. So we always wrap single-document inputs into the nested
-        form and only forward an already-nested value untouched::
+        The contextual ``inputs`` field accepts both shapes
+        (``Union[List[List[str]], List[str]]``):
 
-            "Hello"                  -> [["Hello"]]
-            ["chunk1", "chunk2"]     -> [["chunk1", "chunk2"]]   # one document
-            [["c1", "c2"], ["d1"]]   -> [["c1", "c2"], ["d1"]]   # kept as-is
+        - flat ``List[str]`` of independent texts — the idiomatic batch form.
+          Valid when embedding queries (``input_type="query"``), or documents
+          with ``enable_auto_chunking=True`` + ``input_type="document"``. A flat
+          document list with auto-chunking disabled is rejected by the API, so
+          for the document/unspecified case we set those two params (unless the
+          caller already provided them) to keep the flat call valid.
+        - nested ``List[List[str]]`` — one inner list per document, used when the
+          caller pre-groups chunks that should share context. Forwarded as-is;
+          no auto-chunking params are injected.
+
+        Mapping::
+
+            "Hello"                -> ["Hello"]              (flat)
+            ["text1", "text2"]     -> ["text1", "text2"]     (flat, independent)
+            [["c1", "c2"], ["d1"]] -> [["c1", "c2"], ["d1"]] (nested, kept as-is)
+
+        Returns a ``(inputs, extra_params)`` tuple; ``extra_params`` carries any
+        params that must accompany the chosen ``inputs`` shape.
 
         Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
         """
-        # A single string -> one document containing a single chunk
+        # Already nested (List[List[...]]) -> pre-grouped chunks, valid as-is.
+        if (
+            isinstance(input, list)
+            and len(input) > 0
+            and all(isinstance(item, list) for item in input)
+        ):
+            return input, {}
+
+        # Otherwise, normalize to the preferred flat List[str].
         if isinstance(input, str):
-            return [[input]]
+            flat: list = [input]
+        elif isinstance(input, list):
+            flat = input
+        else:
+            flat = [input]
 
-        # Non-list input -> wrap defensively so we always send the nested form
-        if not isinstance(input, list):
-            return [[input]]  # type: ignore[list-item]
+        # A flat query list is accepted directly; no extra params needed.
+        if optional_params.get("input_type") == "query":
+            return flat, {}
 
-        # Already nested (List[List[...]]) -> valid shape, keep as-is.
-        # ``all`` is vacuously True for an empty list, which is forwarded as-is.
-        if all(isinstance(item, list) for item in input):
-            return input  # type: ignore[return-value]
-
-        # Flat List[str] (chunks of a single document) -> wrap into one document
-        return [input]  # type: ignore[list-item]
+        # A flat document list is only valid with auto-chunking enabled, so add
+        # the required params unless the caller already set them explicitly.
+        extra_params: dict = {}
+        if "input_type" not in optional_params:
+            extra_params["input_type"] = "document"
+        if "enable_auto_chunking" not in optional_params:
+            extra_params["enable_auto_chunking"] = True
+        return flat, extra_params
 
     def transform_embedding_response(
         self,

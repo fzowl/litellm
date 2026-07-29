@@ -200,11 +200,12 @@ class TestVoyageContextualEmbeddings:
 
     def test_contextual_embedding_input_normalization(self):
         """
-        The Voyage contextual endpoint expects ``inputs`` as a nested
-        List[List[str]] (one inner list per document). LiteLLM must normalize
-        the single-document convenience forms (a plain string, or a flat list
-        of chunks) into that nested shape, and forward an already-nested value
-        untouched.
+        The Voyage contextual ``inputs`` field accepts both a flat ``List[str]``
+        and a nested ``List[List[str]]``. Per the campaign spec, LiteLLM must
+        *prefer the flat* ``List[str]`` form when the input permits and only fall
+        back to nested ``List[List[str]]`` when the caller already supplies
+        pre-grouped chunks. A flat list of independent items must NOT be
+        collapsed into a single nested document.
         """
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
@@ -212,24 +213,48 @@ class TestVoyageContextualEmbeddings:
 
         config = VoyageContextualEmbeddingConfig()
 
-        # A single string -> one document containing a single chunk
+        # A single string -> flat List[str] (NOT nested)
         transformed = config.transform_embedding_request(
             "voyage-context-4", "Hello", {}, {}
         )
-        assert transformed["inputs"] == [["Hello"]]
+        assert transformed["inputs"] == ["Hello"]
+        # flat document list is only valid with auto-chunking, so it is enabled
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is True
 
-        # A flat List[str] (chunks of one document) -> wrapped into one document
+        # A flat List[str] of independent texts -> kept flat (not one document)
         transformed = config.transform_embedding_request(
             "voyage-context-4", ["Hello", "world"], {}, {}
         )
-        assert transformed["inputs"] == [["Hello", "world"]]
+        assert transformed["inputs"] == ["Hello", "world"]
+        assert transformed["enable_auto_chunking"] is True
 
-        # An already-nested List[List[str]] -> kept as-is
+        # A flat query List[str] -> passed through as-is, no auto-chunking injected
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["what is voyage?"], {"input_type": "query"}, {}
+        )
+        assert transformed["inputs"] == ["what is voyage?"]
+        assert transformed["input_type"] == "query"
+        assert "enable_auto_chunking" not in transformed
+
+        # An already-nested List[List[str]] (pre-grouped chunks) -> kept as-is,
+        # no auto-chunking params injected
         nested = [["Hello", "world"], ["Test"]]
         transformed = config.transform_embedding_request(
             "voyage-context-4", nested, {}, {}
         )
         assert transformed["inputs"] == nested
+        assert "enable_auto_chunking" not in transformed
+
+        # Caller-provided auto-chunking params are respected, not overridden
+        transformed = config.transform_embedding_request(
+            "voyage-context-4",
+            ["doc a", "doc b"],
+            {"input_type": "document", "enable_auto_chunking": False},
+            {},
+        )
+        assert transformed["inputs"] == ["doc a", "doc b"]
+        assert transformed["enable_auto_chunking"] is False
 
     def test_contextual_embedding_context_4_detection(self):
         """voyage-context-4 must be routed to the contextual embeddings config."""

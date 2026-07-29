@@ -91,15 +91,16 @@ VoyageAI's contextual models (`voyage-context-4`, `voyage-context-3`) provide co
 
 ### Usage
 
-The Voyage contextual endpoint expects the `inputs` field as a **nested** `List[List[str]]`, where each inner list holds the chunks of a *single* document so they are embedded in each other's context. LiteLLM accepts the flatter forms for convenience and normalizes them to that nested shape before calling the API:
+The Voyage contextual `inputs` field accepts **both** a flat `List[str]` and a nested `List[List[str]]` (`Union[List[List[str]], List[str]]`). LiteLLM **prefers the flat `List[str]`** form whenever the input allows it and only falls back to the nested `List[List[str]]` when you supply pre-grouped chunks yourself:
 
-| You pass | LiteLLM sends |
-|----------|---------------|
-| `"Hello"` (a string) | `[["Hello"]]` |
-| `["chunk1", "chunk2"]` (flat list — chunks of one document) | `[["chunk1", "chunk2"]]` |
-| `[["c1", "c2"], ["d1"]]` (already nested — one list per document) | `[["c1", "c2"], ["d1"]]` (unchanged) |
+| You pass | LiteLLM sends (`inputs`) | Extra params |
+|----------|--------------------------|--------------|
+| `"Hello"` (a string) | `["Hello"]` (flat) | `input_type="document"`, `enable_auto_chunking=True` |
+| `["text1", "text2"]` (flat list of independent texts) | `["text1", "text2"]` (flat, kept) | `input_type="document"`, `enable_auto_chunking=True` |
+| `["query"]` with `input_type="query"` | `["query"]` (flat) | none |
+| `[["c1", "c2"], ["d1"]]` (already nested — one list per document) | `[["c1", "c2"], ["d1"]]` (unchanged) | none |
 
-A flat `List[str]` is treated as the chunks of one document; to contextualize **multiple** documents, pass the nested `List[List[str]]` form yourself.
+Why the extra params: a flat `List[str]` document input is only valid when auto-chunking is enabled, so LiteLLM sets `input_type="document"` + `enable_auto_chunking=True` for the flat document case (Voyage splits each string into chunks server-side). Queries (`input_type="query"`) accept a flat list directly, so nothing extra is added. When you pass a nested `List[List[str]]` (pre-grouped chunks that should share context), it is forwarded untouched and **no** auto-chunking params are injected. Any `input_type` / `enable_auto_chunking` you set explicitly is respected.
 
 ```python
 from litellm import embedding
@@ -107,18 +108,18 @@ import os
 
 os.environ['VOYAGE_API_KEY'] = "your-api-key"
 
-# Chunks of a single document (normalized to [["...", "...", "..."]])
+# Flat list of documents (sent as List[str], auto-chunked server-side)
 response = embedding(
     model="voyage/voyage-context-4",
     input=[
-        "Chapter 1: Introduction to AI",
-        "This chapter covers the basics of artificial intelligence.",
-        "We will explore machine learning and deep learning."
+        "Chapter 1: Introduction to AI. This chapter covers the basics.",
+        "Chapter 2: Machine learning and deep learning fundamentals."
     ]
 )
-print(f"Number of chunks: {len(response.data)}")
+print(f"Number of results: {len(response.data)}")
 
-# Multiple documents, each a group of chunks (sent as-is: List[List[str]])
+# Pre-grouped chunks — one inner list per document, embedded in shared context
+# (sent as-is: List[List[str]])
 response = embedding(
     model="voyage/voyage-context-4",
     input=[
