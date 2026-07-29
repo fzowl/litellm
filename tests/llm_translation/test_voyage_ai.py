@@ -516,22 +516,25 @@ class TestVoyageContextualEmbeddings:
 
 
 def test_voyage_new_models_in_cost_map():
-    """New API-served Voyage models are registered in the litellm cost map."""
+    """New Voyage models are registered in the litellm cost map."""
     for model in [
         "voyage/voyage-context-4",
         "voyage/voyage-4",
         "voyage/voyage-4-large",
         "voyage/voyage-4-lite",
+        "voyage/voyage-4-nano",
         "voyage/voyage-multimodal-3.5",
     ]:
         assert model in litellm.model_cost, f"{model} missing from model_cost"
         assert litellm.model_cost[model]["litellm_provider"] == "voyage"
 
 
-def test_voyage_4_nano_not_in_cost_map():
+def test_voyage_4_nano_in_cost_map_free():
     """
-    voyage-4-nano is an open-weight (Hugging Face) model, not served by the
-    Voyage API, so it must not appear as a phantom `voyage/` API endpoint in
-    the cost map.
+    voyage-4-nano is registered as a $0 (free) embedding model.
     """
-    assert "voyage/voyage-4-nano" not in litellm.model_cost
+    entry = litellm.model_cost["voyage/voyage-4-nano"]
+    assert entry["litellm_provider"] == "voyage"
+    assert entry["mode"] == "embedding"
+    assert entry["input_cost_per_token"] == 0.0
+    assert entry["output_cost_per_token"] == 0.0

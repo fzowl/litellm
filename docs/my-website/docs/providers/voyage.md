@@ -57,6 +57,7 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-4-large          | `embedding(model="voyage/voyage-4-large", input)`          | 
 | voyage-4                | `embedding(model="voyage/voyage-4", input)`                | 
 | voyage-4-lite           | `embedding(model="voyage/voyage-4-lite", input)`           | 
+| voyage-4-nano           | `embedding(model="voyage/voyage-4-nano", input)`           | 
 | voyage-3.5              | `embedding(model="voyage/voyage-3.5", input)`              | 
 | voyage-3.5-lite         | `embedding(model="voyage/voyage-3.5-lite", input)`         | 
 | voyage-3-large          | `embedding(model="voyage/voyage-3-large", input)`          | 
@@ -75,8 +76,8 @@ All models listed here https://docs.voyageai.com/embeddings/#models-and-specific
 | voyage-lite-01          | `embedding(model="voyage/voyage-lite-01", input)`          |
 | voyage-lite-01-instruct | `embedding(model="voyage/voyage-lite-01-instruct", input)` |
 
-:::note Open-weight models
-`voyage-4-nano` is an **open-weight** model published on [Hugging Face](https://huggingface.co/voyageai) and is **not served by the Voyage API**. It is therefore not usable via `embedding(model="voyage/voyage-4-nano", ...)` and is intentionally not registered in the LiteLLM cost map. Run it through a self-hosted/HuggingFace embedding endpoint instead.
+:::note voyage-4-nano
+`voyage-4-nano` is also published as an **open-weight** model on [Hugging Face](https://huggingface.co/voyageai). It is registered in the LiteLLM cost map at **$0/M tokens** (free); update the price if your deployment is billed differently.
 :::
 
 ## Contextual Embeddings (voyage-context-4, voyage-context-3)
@@ -159,6 +160,7 @@ print(f"Processed {len(response.data)} documents")
 | voyage-4-large | Best overall quality | 32K | $0.12 |
 | voyage-4 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-4-lite | Latency-sensitive applications | 32K | $0.02 |
+| voyage-4-nano | Smallest, open-weight | 32K | $0.00 |
 | voyage-3.5 | General-purpose, multilingual | 32K | $0.06 |
 | voyage-3.5-lite | Latency-sensitive applications | 32K | $0.02 |
 | voyage-3-large | Best overall quality | 32K | $0.18 |
