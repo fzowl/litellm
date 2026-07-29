@@ -198,6 +198,75 @@ class TestVoyageContextualEmbeddings:
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
 
+    def test_contextual_embedding_input_normalization(self):
+        """
+        Contextual embeddings should send List[str] to the Voyage API when
+        possible (depending on the input), and only fall back to
+        List[List[str]] when the caller already supplied nested groups.
+        """
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        # A single string -> wrapped into a List[str]
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {}, {}
+        )
+        assert transformed["inputs"] == ["Hello"]
+
+        # A flat List[str] -> kept as List[str] (preferred shape)
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
+        assert transformed["inputs"] == ["Hello", "world"]
+
+        # An already-nested List[List[str]] -> kept as-is (fallback shape)
+        nested = [["Hello", "world"], ["Test"]]
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", nested, {}, {}
+        )
+        assert transformed["inputs"] == nested
+
+    def test_contextual_embedding_context_4_detection(self):
+        """voyage-context-4 must be routed to the contextual embeddings config."""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        assert (
+            VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
+                "voyage-context-4"
+            )
+            is True
+        )
+        # Non-contextual voyage-4 family must NOT be treated as contextual
+        assert (
+            VoyageContextualEmbeddingConfig.is_contextualized_embeddings("voyage-4")
+            is False
+        )
+        assert (
+            VoyageContextualEmbeddingConfig.is_contextualized_embeddings(
+                "voyage-4-nano"
+            )
+            is False
+        )
+
+
+def test_voyage_new_models_in_cost_map():
+    """New Voyage models are registered in the litellm cost map."""
+    for model in [
+        "voyage/voyage-context-4",
+        "voyage/voyage-4",
+        "voyage/voyage-4-large",
+        "voyage/voyage-4-lite",
+        "voyage/voyage-4-nano",
+        "voyage/voyage-multimodal-3.5",
+    ]:
+        assert model in litellm.model_cost, f"{model} missing from model_cost"
+        assert litellm.model_cost[model]["litellm_provider"] == "voyage"
+
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
         from litellm.llms.voyage.embedding.transformation_contextual import (

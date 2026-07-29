@@ -106,10 +106,40 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._transform_input(input),
             "model": model,
             **optional_params,
         }
+
+    @staticmethod
+    def _transform_input(
+        input: Union[AllEmbeddingInputValues, List[List[str]]]
+    ) -> List:
+        """
+        Normalize the ``input`` into the shape expected by the Voyage
+        contextualized embeddings API (``inputs`` field).
+
+        The Voyage contextual API accepts both ``List[str]`` and
+        ``List[List[str]]``. We prefer the flatter ``List[str]`` form when the
+        input allows it, and only fall back to ``List[List[str]]`` when the
+        caller already supplied nested groups of chunks.
+
+        Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
+        """
+        # A single string -> single-element List[str]
+        if isinstance(input, str):
+            return [input]
+
+        # Empty / non-list input -> pass through unchanged
+        if not isinstance(input, list) or len(input) == 0:
+            return input  # type: ignore[return-value]
+
+        # Already nested (List[List[str]]) -> keep as-is (fallback shape)
+        if any(isinstance(item, list) for item in input):
+            return input
+
+        # Flat List[str] (or List[int] token ids) -> preferred shape, keep as-is
+        return input
 
     def transform_embedding_response(
         self,
