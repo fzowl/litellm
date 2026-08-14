@@ -1,6 +1,9 @@
+from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Set, Mapping
+from typing import Any, Final, Literal
+
+from typing_extensions import Required, TypedDict
 
 """
 Base Enums/Consts
@@ -52,7 +55,7 @@ class FileType(Enum):
     XLSX = "XLSX"
 
 
-FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
+FILE_EXTENSIONS: Final[Mapping[FileType, list[str]]] = MappingProxyType(
     {
         FileType.AAC: ["aac"],
         FileType.CSV: ["csv"],
@@ -99,7 +102,7 @@ FILE_EXTENSIONS: Mapping[FileType, List[str]] = MappingProxyType(
     }
 )
 
-FILE_MIME_TYPES: Mapping[FileType, str] = MappingProxyType(
+FILE_MIME_TYPES: Final[Mapping[FileType, str]] = MappingProxyType(
     {
         FileType.AAC: "audio/aac",
         FileType.CSV: "text/csv",
@@ -175,7 +178,7 @@ def get_file_mime_type_for_file_type(file_type: FileType) -> str:
 
 
 def get_file_mime_type_from_extension(extension: str) -> str:
-    file_type = get_file_type_from_extension(extension)
+    file_type: Final = get_file_type_from_extension(extension)
     return get_file_mime_type_for_file_type(file_type)
 
 
@@ -184,7 +187,7 @@ FileType Type Groupings (Videos, Images, etc)
 """
 
 # Images
-IMAGE_FILE_TYPES = {
+IMAGE_FILE_TYPES: Final = {
     FileType.PNG,
     FileType.JPEG,
     FileType.GIF,
@@ -199,7 +202,7 @@ def is_image_file_type(file_type):
 
 
 # Videos
-VIDEO_FILE_TYPES = {
+VIDEO_FILE_TYPES: Final = {
     FileType.MOV,
     FileType.MP4,
     FileType.MPEG,
@@ -218,7 +221,7 @@ def is_video_file_type(file_type):
 
 
 # Audio
-AUDIO_FILE_TYPES = {
+AUDIO_FILE_TYPES: Final = {
     FileType.AAC,
     FileType.FLAC,
     FileType.MP3,
@@ -235,7 +238,7 @@ def is_audio_file_type(file_type):
 
 
 # Text
-TEXT_FILE_TYPES = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
+TEXT_FILE_TYPES: Final = {FileType.CSV, FileType.HTML, FileType.RTF, FileType.TXT}
 
 
 def is_text_file_type(file_type):
@@ -247,37 +250,94 @@ Other FileType Groupings
 """
 # Accepted file types for GEMINI 1.5 through Vertex AI
 # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts#gemini-send-multimodal-samples-images-nodejs
-GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
-    # Image
-    FileType.PNG,
-    FileType.JPEG,
-    FileType.WEBP,
-    # Audio
-    FileType.AAC,
-    FileType.FLAC,
-    FileType.MP3,
-    FileType.MPA,
-    FileType.MPEG,
-    FileType.MPGA,
-    FileType.OPUS,
-    FileType.PCM,
-    FileType.WAV,
-    FileType.WEBM,
-    # Video
-    FileType.FLV,
-    FileType.MOV,
-    FileType.MPEG,
-    FileType.MPEGPS,
-    FileType.MPG,
-    FileType.MP4,
-    FileType.WEBM,
-    FileType.WMV,
-    FileType.THREE_GPP,
-    # PDF
-    FileType.PDF,
-    FileType.TXT,
-}
+GEMINI_1_5_ACCEPTED_FILE_TYPES: Final[frozenset[FileType]] = frozenset(
+    {
+        # Image
+        FileType.PNG,
+        FileType.JPEG,
+        FileType.WEBP,
+        # Audio
+        FileType.AAC,
+        FileType.FLAC,
+        FileType.MP3,
+        FileType.MPA,
+        FileType.MPEG,
+        FileType.MPGA,
+        FileType.OPUS,
+        FileType.PCM,
+        FileType.WAV,
+        FileType.WEBM,
+        # Video
+        FileType.FLV,
+        FileType.MOV,
+        FileType.MPEG,
+        FileType.MPEGPS,
+        FileType.MPG,
+        FileType.MP4,
+        FileType.WEBM,
+        FileType.WMV,
+        FileType.THREE_GPP,
+        # PDF
+        FileType.PDF,
+        FileType.TXT,
+    }
+)
 
 
 def is_gemini_1_5_accepted_file_type(file_type: FileType) -> bool:
     return file_type in GEMINI_1_5_ACCEPTED_FILE_TYPES
+
+
+"""
+Two-Step File Upload Types
+"""
+
+
+class TwoStepFileUploadRequest(TypedDict):
+    """
+    Request structure for two-step file upload process.
+
+    Step 1: Initial request to get upload URL
+    Step 2: Upload file content to the upload URL
+
+    Used by providers like Manus and Google Cloud Storage.
+    """
+
+    method: Required[str]
+    url: Required[str]
+    headers: Required[dict[str, str]]
+    data: Required[str | bytes | dict[str, Any]]
+
+
+class TwoStepFileUploadConfig(TypedDict, total=False):
+    """
+    Configuration for two-step file upload process.
+
+    Properties:
+        initial_request: Request to create file record and get upload URL
+        upload_request: Request to upload actual file content
+        upload_url_location: Where to find upload URL ('headers' or 'body')
+        upload_url_key: Key name for upload URL in response (default: 'upload_url')
+    """
+
+    initial_request: Required[TwoStepFileUploadRequest]
+    upload_request: Required[TwoStepFileUploadRequest]
+    upload_url_location: Required[Literal["headers", "body"]]
+    upload_url_key: str
+
+
+class StreamingMediaUploadConfig(TypedDict, total=False):
+    """Drives a memory-bounded single-request upload (GCS simple/media upload).
+
+    The handler stages ``body_stream`` to a temp file off the event loop (so peak
+    memory stays bounded), then PUTs/POSTs it in one request with a known
+    Content-Length. Unlike a resumable chunked upload this incurs no per-chunk
+    round-trips, so a multi-GB upload finishes in one continuous transfer instead
+    of hundreds of sequential PUTs that overrun client/LB timeouts.
+
+    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
+    avoid importing the llms layer into types.
+    """
+
+    body_stream: Required[Any]
+    content_type: str

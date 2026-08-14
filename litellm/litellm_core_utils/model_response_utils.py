@@ -2,7 +2,7 @@
 Utility functions for ModelResponse and ModelResponseStream objects.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from litellm.types.utils import Delta, ModelResponseBase, ModelResponseStream
 
@@ -25,7 +25,7 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
     """
     # Fields that are always set in ModelResponseBase and should be ignored
     # These are structural fields that don't indicate content
-    BASE_FIELDS = ModelResponseBase.model_fields.keys()
+    BASE_FIELDS: Final = ModelResponseBase.model_fields.keys()
 
     # Check if usage exists - this indicates meaningful data
     if getattr(model_response, "usage", None) is not None:
@@ -47,7 +47,7 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
 
     # Check for any non-base fields that are set
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    for model_response_field in type(model_response).model_fields.keys():
+    for model_response_field in type(model_response).model_fields:
         # Skip base fields that are always set
         if model_response_field in BASE_FIELDS:
             continue
@@ -114,23 +114,19 @@ def _is_choice_non_empty(choice: Any) -> bool:
     """
     # Check finish_reason
     if hasattr(choice, "finish_reason") and choice.finish_reason is not None:
-
         return True
 
     # Check logprobs
     if hasattr(choice, "logprobs") and choice.logprobs is not None:
-
         return True
 
     # Check enhancements (if present)
     if hasattr(choice, "enhancements") and choice.enhancements is not None:
-
         return True
 
     # Deep check delta object
     if hasattr(choice, "delta") and choice.delta is not None:
         if _is_delta_non_empty(choice.delta):
-
             return True
 
     # Check model_extra for dynamically added fields on the choice
@@ -138,19 +134,12 @@ def _is_choice_non_empty(choice: Any) -> bool:
         for extra_field_name, extra_field_value in choice.model_extra.items():
             # Skip certain structural fields that are just default/None placeholders
             if extra_field_name == "index" and extra_field_value == 0:
-
                 continue
-            if (
-                extra_field_name in {"finish_reason", "logprobs"}
-                and extra_field_value is None
-            ):
-
+            if extra_field_name in {"finish_reason", "logprobs"} and extra_field_value is None:
                 continue
             if extra_field_name == "delta":
-
                 continue
             if _has_meaningful_content(extra_field_value):
-
                 return True
 
     # Check for any other non-standard fields on the choice
@@ -169,12 +158,10 @@ def _is_choice_non_empty(choice: Any) -> bool:
                 "enhancements",
             }
         ):
-
             continue
 
         attr_value = getattr(choice, attr_name, None)
         if _has_meaningful_content(attr_value):
-
             return True
 
     return False
@@ -195,22 +182,16 @@ def _is_delta_non_empty(delta: Delta) -> bool:
         for extra_field_name, extra_field_value in delta.model_extra.items():
             # Even structural fields are meaningful if they have actual content
             if _has_meaningful_content(extra_field_value):
-
                 return True
 
     # Check all regular attributes of the delta object
     for attr_name in dir(delta):
         # Skip private attributes, methods, and Pydantic-specific fields
-        if (
-            attr_name.startswith("_")
-            or callable(getattr(delta, attr_name))
-            or attr_name.startswith("model_")
-        ):
+        if attr_name.startswith("_") or callable(getattr(delta, attr_name)) or attr_name.startswith("model_"):
             continue
 
         attr_value = getattr(delta, attr_name, None)
         if _has_meaningful_content(attr_value):
-
             return True
 
     return False

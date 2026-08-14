@@ -1,5 +1,3 @@
-from typing import Optional
-
 from pydantic import BaseModel
 
 
@@ -9,5 +7,5 @@ class AnthropicMetadata(BaseModel):
 
     https://docs.anthropic.com/en/api/messages#body-metadata-user-id
     """
-    user_id: Optional[str] = None
 
+    user_id: str | None = None

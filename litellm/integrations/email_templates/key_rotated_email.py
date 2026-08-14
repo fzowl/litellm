@@ -2,7 +2,9 @@
 Modern Email Templates for LiteLLM Email Service with professional styling
 """
 
-KEY_ROTATED_EMAIL_TEMPLATE = """
+from typing import Final
+
+KEY_ROTATED_EMAIL_TEMPLATE: Final = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -222,4 +224,3 @@ response = client.chat.completions.create(<br>
 </body>
 </html>
 """
-

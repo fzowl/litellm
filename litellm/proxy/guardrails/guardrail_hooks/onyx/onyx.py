@@ -5,26 +5,51 @@
 #
 # +-------------------------------------------------------------+
 import os
-from typing import TYPE_CHECKING, Any, Literal, Optional, Type
 import uuid
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 
+import httpx
 from fastapi import HTTPException
+
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    log_guardrail_information,
+)
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.guardrails import GenericGuardrailAPIInputs
-from litellm.types.utils import ModelResponse
+from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import GenericGuardrailAPIInputs, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
+
 class OnyxGuardrail(CustomGuardrail):
-    def __init__(self, api_base: Optional[str] = None, api_key: Optional[str] = None, **kwargs):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+    @classmethod
+    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+        return [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
+            GuardrailEventHooks.post_call,
+        ]
+
+    def __init__(
+        self,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        timeout: float | None = 10.0,
+        **kwargs,
+    ):
+        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        timeout = timeout or int(os.getenv("ONYX_TIMEOUT", 10.0))
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
+            params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
+        )
         self.api_base = api_base or os.getenv(
             "ONYX_API_BASE",
             "https://ai-guard.onyx.security",
@@ -34,7 +59,7 @@ class OnyxGuardrail(CustomGuardrail):
             raise ValueError("ONYX_API_KEY environment variable is not set")
         self.optional_params = kwargs
         super().__init__(**kwargs)
-        verbose_proxy_logger.info(f"OnyxGuard initialized with server: {self.api_base}")
+        verbose_proxy_logger.info("OnyxGuard initialized with server: %s", self.api_base)
 
     async def _validate_with_guard_server(
         self,
@@ -45,7 +70,7 @@ class OnyxGuardrail(CustomGuardrail):
         """
         Call external Onyx Guard server for validation
         """
-        response = await self.async_handler.post(
+        response: Final = await self.async_handler.post(
             f"{self.api_base}/guard/evaluate/v1/{self.api_key}/litellm",
             json={
                 "payload": payload,
@@ -57,18 +82,19 @@ class OnyxGuardrail(CustomGuardrail):
             },
         )
         response.raise_for_status()
-        result = response.json()
+        result: Final = response.json()
         if not result.get("allowed", True):
             detection_message = "Unknown violation"
             if "violated_rules" in result:
                 detection_message = ", ".join(result["violated_rules"])
-            verbose_proxy_logger.warning(f"Request blocked by Onyx Guard. Violations: {detection_message}.")
+            verbose_proxy_logger.warning("Request blocked by Onyx Guard. Violations: %s.", detection_message)
             raise HTTPException(
                 status_code=400,
                 detail=f"Request blocked by Onyx Guard. Violations: {detection_message}.",
             )
         return result
-    
+
+    @log_guardrail_information
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -76,20 +102,29 @@ class OnyxGuardrail(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
+        conversation_id: Final = logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
 
-        conversation_id = logging_obj.litellm_call_id if logging_obj else str(uuid.uuid4())
-        
-        verbose_proxy_logger.info("Running Onyx Guard apply_guardrail hook", extra={"conversation_id": conversation_id, "input_type": input_type})
+        verbose_proxy_logger.info(
+            "Running Onyx Guard apply_guardrail hook",
+            extra={"conversation_id": conversation_id, "input_type": input_type},
+        )
         payload = {}
         if input_type == "request":
             payload = request_data.get("proxy_server_request", {})
         else:
             try:
-                response = ModelResponse(**request_data)
-                parsed = response.json()
+                response: Final = ModelResponse(**request_data)
+                parsed: Final = response.json()
                 payload = parsed.get("response", {})
             except Exception as e:
-                verbose_proxy_logger.error(f"Error in converting request_data to ModelResponse: {str(e)}", extra={"conversation_id": conversation_id, "input_type": input_type})
+                verbose_proxy_logger.error(
+                    "Error in converting request_data to ModelResponse: %s",
+                    e,
+                    extra={
+                        "conversation_id": conversation_id,
+                        "input_type": input_type,
+                    },
+                )
                 payload = request_data
 
         try:
@@ -98,11 +133,15 @@ class OnyxGuardrail(CustomGuardrail):
         except HTTPException as e:
             raise e
         except Exception as e:
-            verbose_proxy_logger.error(f"Error in apply_guardrail guard: {str(e)}", extra={"conversation_id": conversation_id, "input_type": input_type})
+            verbose_proxy_logger.error(
+                "Error in apply_guardrail guard: %s",
+                e,
+                extra={"conversation_id": conversation_id, "input_type": input_type},
+            )
             return inputs
 
     @staticmethod
-    def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
+    def get_config_model() -> type["GuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.onyx import (
             OnyxGuardrailConfigModel,
         )

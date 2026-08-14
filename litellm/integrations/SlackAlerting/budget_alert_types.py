@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Literal
+from typing import Final, Literal
 
-from litellm.proxy._types import CallInfo
+from litellm.proxy._types import CallInfo, Litellm_EntityType
 
 
 class BaseBudgetAlertType(ABC):
@@ -10,12 +10,10 @@ class BaseBudgetAlertType(ABC):
     @abstractmethod
     def get_event_message(self) -> str:
         """Return the event message for this alert type"""
-        pass
 
     @abstractmethod
     def get_id(self, user_info: CallInfo) -> str:
         """Return the ID to use for caching/tracking this alert"""
-        pass
 
 
 class ProxyBudgetAlert(BaseBudgetAlertType):
@@ -31,6 +29,8 @@ class SoftBudgetAlert(BaseBudgetAlertType):
         return "Soft Budget Crossed: "
 
     def get_id(self, user_info: CallInfo) -> str:
+        if user_info.event_group == Litellm_EntityType.TEAM:
+            return user_info.team_id or "default_id"
         return user_info.token or "default_id"
 
 
@@ -74,27 +74,39 @@ class ProjectedLimitExceededAlert(BaseBudgetAlertType):
         return user_info.token or "default_id"
 
 
+class ProjectBudgetAlert(BaseBudgetAlertType):
+    def get_event_message(self) -> str:
+        return "Project Budget: "
+
+    def get_id(self, user_info: CallInfo) -> str:
+        return user_info.token or "default_id"
+
+
 def get_budget_alert_type(
     type: Literal[
         "token_budget",
-        "soft_budget",
         "user_budget",
+        "soft_budget",
+        "max_budget_alert",
         "team_budget",
         "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
+        "project_budget",
     ],
 ) -> BaseBudgetAlertType:
     """Factory function to get the appropriate budget alert type class"""
 
-    alert_types = {
+    alert_types: Final = {
         "proxy_budget": ProxyBudgetAlert(),
         "soft_budget": SoftBudgetAlert(),
         "user_budget": UserBudgetAlert(),
+        "max_budget_alert": TokenBudgetAlert(),
         "team_budget": TeamBudgetAlert(),
         "organization_budget": OrganizationBudgetAlert(),
         "token_budget": TokenBudgetAlert(),
         "projected_limit_exceeded": ProjectedLimitExceededAlert(),
+        "project_budget": ProjectBudgetAlert(),
     }
 
     if type in alert_types:

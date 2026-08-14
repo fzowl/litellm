@@ -5,8 +5,6 @@ LiteLLM Proxy supports the OpenAI Responses API natively when the underlying mod
 This config enables pass-through behavior to the proxy's /v1/responses endpoint.
 """
 
-from typing import Optional
-
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import LlmProviders
@@ -15,7 +13,7 @@ from litellm.types.utils import LlmProviders
 class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
     """
     Configuration for LiteLLM Proxy Responses API support.
-    
+
     Extends OpenAI's config since the proxy follows OpenAI's API spec,
     but uses LITELLM_PROXY_API_BASE for the base URL.
     """
@@ -26,16 +24,16 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
         Get the endpoint for LiteLLM Proxy responses API.
-        
+
         Uses LITELLM_PROXY_API_BASE environment variable if api_base is not provided.
         """
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
-        
+
         if api_base is None:
             raise ValueError(
                 "api_base not set for LiteLLM Proxy responses API. "
@@ -46,3 +44,7 @@ class LiteLLMProxyResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
 
         return f"{api_base}/responses"
+
+    def supports_native_websocket(self) -> bool:
+        """LiteLLM Proxy does not support native WebSocket for Responses API"""
+        return False

@@ -1,9 +1,11 @@
 from datetime import timedelta
+from typing import Final
 
 from fastapi import HTTPException
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, InvitationNew, UserAPIKeyAuth
+from litellm.repositories.table_repositories import InvitationLinkRepository
 
 
 async def create_invitation_for_user(
@@ -14,18 +16,18 @@ async def create_invitation_for_user(
     Create an invitation for the user to onboard to LiteLLM Admin UI.
     """
     from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
-    
+
     if prisma_client is None:
         raise HTTPException(
             status_code=400,
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    current_time = litellm.utils.get_utc_datetime()
-    expires_at = current_time + timedelta(days=7)
+    current_time: Final = litellm.utils.get_utc_datetime()
+    expires_at: Final = current_time + timedelta(days=7)
 
     try:
-        response = await prisma_client.db.litellm_invitationlink.create(
+        response: Final = await InvitationLinkRepository(prisma_client).table.create(
             data={
                 "user_id": data.user_id,
                 "created_at": current_time,
@@ -33,7 +35,7 @@ async def create_invitation_for_user(
                 "created_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
                 "updated_at": current_time,
                 "updated_by": user_api_key_dict.user_id or litellm_proxy_admin_name,
-            }  # type: ignore
+            }
         )
         return response
     except Exception as e:

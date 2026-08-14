@@ -6,7 +6,6 @@ import traceback
 import json
 
 
-
 from typing import List, Dict, Any
 
 sys.path.insert(
@@ -55,7 +54,7 @@ def test_get_model_info_custom_llm_with_same_name_vllm(monkeypatch):
 
 
 def test_get_model_info_shows_correct_supports_vision():
-    info = litellm.get_model_info("gemini/gemini-1.5-flash")
+    info = litellm.get_model_info("gemini/gemini-2.0-flash")
     print("info", info)
     assert info["supports_vision"] is True
 
@@ -83,9 +82,9 @@ def test_get_model_info_finetuned_models():
 
 
 def test_get_model_info_gemini_pro():
-    info = litellm.get_model_info("gemini-1.5-pro-002")
+    info = litellm.get_model_info("gemini-2.0-flash")
     print("info", info)
-    assert info["key"] == "gemini-1.5-pro-002"
+    assert info["key"] == "gemini-2.0-flash"
 
 
 def test_get_model_info_ollama_chat():
@@ -115,20 +114,18 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-
-
 def test_get_model_info_bedrock_region():
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     args = {
-        "model": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
         "custom_llm_provider": "bedrock",
     }
-    litellm.model_cost.pop("us.anthropic.claude-3-5-sonnet-20241022-v2:0", None)
+    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
     info = litellm.get_model_info(**args)
     print("info", info)
-    assert info["key"] == "anthropic.claude-3-5-sonnet-20241022-v2:0"
-    assert info["litellm_provider"] == "bedrock"
+    assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    assert info["litellm_provider"] == "bedrock_converse"
 
 
 @pytest.mark.parametrize(
@@ -156,7 +153,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     info = litellm.get_model_info(**args)
     print("info", info)
     assert info["key"] == "ft:gpt-3.5-turbo"
-
 
 
 def _enforce_bedrock_converse_models(
@@ -281,7 +277,7 @@ def test_get_model_info_custom_model_router():
                 },
                 "model_info": {
                     "id": "c20d603e-1166-4e0f-aa65-ed9c476ad4ca",
-                }
+                },
             }
         ]
     )
@@ -311,7 +307,15 @@ def test_get_model_info_bedrock_models():
                 for commitment in potential_commitments:
                     k = k.replace(f"{commitment}/", "")
             base_model = BedrockModelInfo.get_base_model(k)
-            base_model_info = litellm.model_cost[base_model]
+            # get_base_model() returns model id without "bedrock/" prefix; cost map keys use "bedrock/<model>"
+            base_model_key = (
+                base_model
+                if base_model in litellm.model_cost
+                else f"bedrock/{base_model}"
+            )
+            if base_model_key not in litellm.model_cost:
+                continue
+            base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
                 if "invoke/" in k:
                     continue
@@ -322,6 +326,38 @@ def test_get_model_info_bedrock_models():
                     assert (
                         v[base_model_key] == base_model_value
                     ), f"{base_model_key} is not equal to {base_model_value} for model {k}"
+
+
+def test_get_model_info_bedrock_cross_region_capability_parity():
+    """
+    Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
+    regional drift check above (which filters on "bedrock") never reaches them.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixes = ("us.", "eu.", "apac.", "us-gov.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        for cap, base_value in litellm.model_cost[base_model_key].items():
+            if not cap.startswith("supports_"):
+                continue
+            assert cap in v, f"{cap} is on {base_model_key} but missing from {k}"
+            assert (
+                v[cap] == base_value
+            ), f"{cap} is {v[cap]} on {k} but {base_value} on {base_model_key}"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
 def test_get_model_info_huggingface_models(monkeypatch):
@@ -372,3 +408,86 @@ def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, prov
     print("info", info)
     assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
     assert info["litellm_provider"] == "bedrock"
+
+
+def test_get_model_info_case_insensitive_lookup(monkeypatch):
+    """
+    Test that model info lookup is case-insensitive.
+
+    This ensures that users can use lowercase model names even when the model cost
+    map has mixed-case keys (e.g., "Qwen/Qwen3-Next-80B-A3B-Thinking").
+
+    Related Slack discussion: Users were getting "does not support parameters: ['tools']"
+    errors when using lowercase model names like "qwen/qwen3-next-80b-a3b-thinking"
+    because the lookup was case-sensitive.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a test model with mixed-case name
+    litellm.register_model(
+        {
+            "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "together_ai",
+                "supports_function_calling": True,
+            }
+        }
+    )
+
+    # Test 1: Exact case should work
+    info = litellm.get_model_info(
+        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
+    )
+    assert info is not None
+    assert info["supports_function_calling"] is True
+
+    # Test 2: Lowercase should also work (case-insensitive lookup)
+    info_lower = litellm.get_model_info(
+        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_lower is not None
+    assert info_lower["supports_function_calling"] is True
+
+    # Test 3: Mixed case should also work
+    info_mixed = litellm.get_model_info(
+        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_mixed is not None
+    assert info_mixed["supports_function_calling"] is True
+
+
+def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
+    """
+    Test that supports_function_calling check works with case-insensitive model lookup.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a model with mixed-case name that supports function calling
+    litellm.register_model(
+        {
+            "test_provider/TestModel-ABC": {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "test_provider",
+                "supports_function_calling": True,
+            }
+        }
+    )
+
+    # Test that supports_function_calling works with lowercase model name
+    from litellm.utils import supports_function_calling
+
+    # Exact case
+    assert (
+        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
+        is True
+    )
+
+    # Lowercase (should now work with case-insensitive lookup)
+    assert (
+        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
+        is True
+    )

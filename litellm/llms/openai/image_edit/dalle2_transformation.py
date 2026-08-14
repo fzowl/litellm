@@ -1,5 +1,5 @@
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Dict, List, Tuple, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from httpx._types import RequestFiles
 
@@ -22,7 +22,7 @@ else:
 class DallE2ImageEditConfig(OpenAIImageEditConfig):
     """
     DALL-E-2 specific configuration for image edit API.
-    
+
     DALL-E-2 only supports editing a single image (not an array).
     Uses "image" field name instead of "image[]".
     """
@@ -30,40 +30,40 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
-        image_edit_optional_request_params: Dict,
+        prompt: str | None,
+        image: FileTypes | None,
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles]:
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform image edit request for DALL-E-2.
 
         DALL-E-2 only accepts a single image with field name "image" (not "image[]").
         """
-        request = ImageEditRequestParams(
-            model=model,
-            image=image,
-            prompt=prompt,
+        request_params: Final = {
+            "model": model,
             **image_edit_optional_request_params,
-        )
-        request_dict = cast(Dict, request)
+        }
+        if image is not None:
+            request_params["image"] = image
+        if prompt is not None:
+            request_params["prompt"] = prompt
+
+        request: Final = ImageEditRequestParams(**request_params)
+        request_dict: Final = cast(dict, request)
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
         #########################################################
-        _image_list = request_dict.get("image")
+        _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files = {
-            k: v for k, v in request_dict.items() if k not in ["image", "mask"]
-        }
-        files_list: List[Tuple[str, Any]] = []
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter - DALL-E-2 only supports single image
         if _image_list is not None:
-            image_list = (
-                [_image_list] if not isinstance(_image_list, list) else _image_list
-            )
+            image_list: Final = [_image_list] if not isinstance(_image_list, list) else _image_list
 
             # Validate only one image is provided
             if len(image_list) > 1:
@@ -89,13 +89,10 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
                 _mask = _mask[0] if _mask else None
 
             if _mask is not None:
-                mask_content_type: str = ImageEditRequestUtils.get_image_content_type(
-                    _mask
-                )
+                mask_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_mask)
                 if isinstance(_mask, BufferedReader):
                     files_list.append(("mask", (_mask.name, _mask, mask_content_type)))
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
-

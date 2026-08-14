@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import httpx
 
@@ -24,13 +24,14 @@ else:
 class TextToSpeechRequestData(TypedDict, total=False):
     """
     Structured return type for text-to-speech transformations.
-    
+
     This ensures a consistent interface across all TTS providers.
     Providers should set ONE of: dict_body, ssml_body, or text_body.
     """
-    dict_body: Dict[str, Any]  # JSON request body (e.g., OpenAI TTS)
+
+    dict_body: dict[str, Any]  # JSON request body (e.g., OpenAI TTS)
     ssml_body: str  # SSML/XML string body (e.g., Azure AVA TTS)
-    headers: Dict[str, str]  # Provider-specific headers to merge with base headers
+    headers: dict[str, str]  # Provider-specific headers to merge with base headers
 
 
 class BaseTextToSpeechConfig(ABC):
@@ -61,29 +62,27 @@ class BaseTextToSpeechConfig(ABC):
         """
         Get list of OpenAI TTS parameters supported by this provider
         """
-        pass
 
     @abstractmethod
     def map_openai_params(
         self,
         model: str,
-        optional_params: Dict,
-        voice: Optional[Union[str, Dict]] = None,
+        optional_params: dict,
+        voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: Dict = {},
-    ) -> Tuple[Optional[str], Dict]:
+        kwargs: dict = {},
+    ) -> tuple[str | None, dict]:
         """
         Map OpenAI TTS parameters to provider-specific parameters
         """
-        pass
 
     @abstractmethod
     def validate_environment(
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and return headers
@@ -94,7 +93,7 @@ class BaseTextToSpeechConfig(ABC):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -109,20 +108,19 @@ class BaseTextToSpeechConfig(ABC):
         self,
         model: str,
         input: str,
-        voice: Optional[str],
-        optional_params: Dict,
-        litellm_params: Dict,
+        voice: str | None,
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict,
     ) -> TextToSpeechRequestData:
         """
         Transform request to provider-specific format.
-        
+
         Returns:
             TextToSpeechRequestData: A structured dict containing:
                 - body: The request body (JSON dict, XML string, or binary data)
                 - headers: Provider-specific headers to merge with base headers
         """
-        pass
 
     @abstractmethod
     def transform_text_to_speech_response(
@@ -134,11 +132,8 @@ class BaseTextToSpeechConfig(ABC):
         """
         Transform provider response to standard format
         """
-        pass
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Dict
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -146,4 +141,3 @@ class BaseTextToSpeechConfig(ABC):
             message=error_message,
             headers=headers,
         )
-

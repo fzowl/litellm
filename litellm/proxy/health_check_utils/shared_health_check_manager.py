@@ -1,21 +1,22 @@
 import asyncio
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import (
-    DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
+    DEFAULT_SHARED_HEALTH_CHECK_TTL,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.health_check import perform_health_check
 
 
 class SharedHealthCheckManager:
     """
     Manager for coordinating health checks across multiple pods using Redis.
-    
+
     This class implements a shared health check state mechanism that:
     - Prevents duplicate health checks across pods
     - Caches health check results with configurable TTL
@@ -25,7 +26,7 @@ class SharedHealthCheckManager:
 
     def __init__(
         self,
-        redis_cache: Optional[RedisCache] = None,
+        redis_cache: RedisCache | None = None,
         health_check_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_TTL,
         lock_ttl: int = DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     ):
@@ -57,7 +58,7 @@ class SharedHealthCheckManager:
     async def acquire_health_check_lock(self) -> bool:
         """
         Attempt to acquire the global health check lock.
-        
+
         Returns:
             bool: True if lock was acquired, False otherwise
         """
@@ -66,28 +67,22 @@ class SharedHealthCheckManager:
             return False
 
         try:
-            lock_key = self.get_health_check_lock_key()
-            acquired = await self.redis_cache.async_set_cache(
+            lock_key: Final = self.get_health_check_lock_key()
+            acquired: Final = await self.redis_cache.async_set_cache(
                 lock_key,
                 self.pod_id,
                 nx=True,  # Only set if key doesn't exist
                 ttl=self.lock_ttl,
             )
-            
+
             if acquired:
-                verbose_proxy_logger.info(
-                    "Pod %s acquired health check lock", self.pod_id
-                )
+                verbose_proxy_logger.info("Pod %s acquired health check lock", self.pod_id)
             else:
-                verbose_proxy_logger.debug(
-                    "Pod %s failed to acquire health check lock", self.pod_id
-                )
-            
-            return acquired
+                verbose_proxy_logger.debug("Pod %s failed to acquire health check lock", self.pod_id)
+
+            return bool(acquired)
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error acquiring health check lock: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error acquiring health check lock: %s", str(e))
             return False
 
     async def release_health_check_lock(self) -> None:
@@ -96,23 +91,19 @@ class SharedHealthCheckManager:
             return
 
         try:
-            lock_key = self.get_health_check_lock_key()
+            lock_key: Final = self.get_health_check_lock_key()
             # Only release if we own the lock
-            current_owner = await self.redis_cache.async_get_cache(lock_key)
+            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
             if current_owner == self.pod_id:
                 await self.redis_cache.async_delete_cache(lock_key)
-                verbose_proxy_logger.info(
-                    "Pod %s released health check lock", self.pod_id
-                )
+                verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error releasing health check lock: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error releasing health check lock: %s", str(e))
 
-    async def get_cached_health_check_results(self) -> Optional[Dict[str, Any]]:
+    async def get_cached_health_check_results(self) -> dict[str, Any] | None:
         """
         Get cached health check results from Redis.
-        
+
         Returns:
             Optional[Dict]: Cached health check results or None if not found/expired
         """
@@ -120,9 +111,9 @@ class SharedHealthCheckManager:
             return None
 
         try:
-            cache_key = self.get_health_check_cache_key()
-            cached_data = await self.redis_cache.async_get_cache(cache_key)
-            
+            cache_key: Final = self.get_health_check_cache_key()
+            cached_data: Final = await self.redis_cache.async_get_cache(cache_key)
+
             if cached_data is None:
                 return None
 
@@ -133,9 +124,9 @@ class SharedHealthCheckManager:
                 cached_results = cached_data
 
             # Check if the cache is still valid
-            cache_timestamp = cached_results.get("timestamp", 0)
-            current_time = time.time()
-            
+            cache_timestamp: Final = cached_results.get("timestamp", 0)
+            current_time: Final = time.time()
+
             if current_time - cache_timestamp > self.health_check_ttl:
                 verbose_proxy_logger.debug("Cached health check results expired")
                 return None
@@ -144,19 +135,17 @@ class SharedHealthCheckManager:
             return cached_results
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error getting cached health check results: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error getting cached health check results: %s", str(e))
             return None
 
     async def cache_health_check_results(
-        self, 
-        healthy_endpoints: List[Dict[str, Any]], 
-        unhealthy_endpoints: List[Dict[str, Any]]
+        self,
+        healthy_endpoints: list[dict[str, Any]],
+        unhealthy_endpoints: list[dict[str, Any]],
     ) -> None:
         """
         Cache health check results in Redis.
-        
+
         Args:
             healthy_endpoints: List of healthy endpoints
             unhealthy_endpoints: List of unhealthy endpoints
@@ -165,7 +154,7 @@ class SharedHealthCheckManager:
             return
 
         try:
-            cache_data = {
+            cache_data: Final = {
                 "healthy_endpoints": healthy_endpoints,
                 "unhealthy_endpoints": unhealthy_endpoints,
                 "healthy_count": len(healthy_endpoints),
@@ -174,13 +163,13 @@ class SharedHealthCheckManager:
                 "checked_by": self.pod_id,
             }
 
-            cache_key = self.get_health_check_cache_key()
+            cache_key: Final = self.get_health_check_cache_key()
             await self.redis_cache.async_set_cache(
                 cache_key,
-                json.dumps(cache_data),
+                safe_dumps(cache_data),
                 ttl=self.health_check_ttl,
             )
-            
+
             verbose_proxy_logger.info(
                 "Cached health check results for %d healthy and %d unhealthy endpoints",
                 len(healthy_endpoints),
@@ -188,29 +177,31 @@ class SharedHealthCheckManager:
             )
 
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error caching health check results: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error caching health check results: %s", str(e))
 
     async def perform_shared_health_check(
-        self, 
-        model_list: List[Dict[str, Any]], 
-        details: bool = True
-    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        self,
+        model_list: list[dict[str, Any]],
+        details: bool = True,
+        max_concurrency: int | None = None,
+        health_check_skip_disabled_background_models: bool = False,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """
         Perform health check with shared state coordination.
-        
+
         This method:
         1. First checks if there are recent cached results
         2. If no recent cache, tries to acquire lock to run health check
         3. If lock acquired, runs health check and caches results
         4. If lock not acquired, waits briefly and tries to get cached results again
         5. Falls back to running health check locally if no cache available
-        
+
         Args:
             model_list: List of models to check
             details: Whether to include detailed information
-            
+            max_concurrency: Optional limit on concurrent health check requests
+            health_check_skip_disabled_background_models: Remove models with disable_background_health_check: true
+
         Returns:
             Tuple of (healthy_endpoints, unhealthy_endpoints)
         """
@@ -220,63 +211,110 @@ class SharedHealthCheckManager:
             return (
                 cached_results.get("healthy_endpoints", []),
                 cached_results.get("unhealthy_endpoints", []),
+                {},
             )
 
         # No recent cache, try to acquire lock
-        lock_acquired = await self.acquire_health_check_lock()
-        
+        lock_acquired: Final = await self.acquire_health_check_lock()
+
         if lock_acquired:
             try:
                 # We have the lock, run health check
                 verbose_proxy_logger.info(
-                    "Pod %s running health check for %d models", 
-                    self.pod_id, 
-                    len(model_list)
+                    "Pod %s running health check for %d models",
+                    self.pod_id,
+                    len(model_list),
                 )
-                
-                healthy_endpoints, unhealthy_endpoints = await perform_health_check(
-                    model_list=model_list, details=details
+
+                (
+                    healthy_endpoints,
+                    unhealthy_endpoints,
+                    exceptions_by_model_id,
+                ) = await perform_health_check(
+                    model_list=model_list,
+                    details=details,
+                    max_concurrency=max_concurrency,
+                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
                 )
-                
+
                 # Cache the results
-                await self.cache_health_check_results(
-                    healthy_endpoints, unhealthy_endpoints
-                )
-                
-                return healthy_endpoints, unhealthy_endpoints
-                
+                await self.cache_health_check_results(healthy_endpoints, unhealthy_endpoints)
+
+                return healthy_endpoints, unhealthy_endpoints, exceptions_by_model_id
+
             finally:
                 # Always release the lock
                 await self.release_health_check_lock()
         else:
-            # Lock not acquired, wait briefly and try to get cached results
-            verbose_proxy_logger.debug(
-                "Pod %s waiting for other pod to complete health check", self.pod_id
-            )
-            
-            # Wait a bit for the other pod to complete
-            await asyncio.sleep(2)
-            
-            # Try to get cached results again
-            cached_results = await self.get_cached_health_check_results()
-            if cached_results is not None:
-                return (
-                    cached_results.get("healthy_endpoints", []),
-                    cached_results.get("unhealthy_endpoints", []),
+            # If Redis is not configured, skip polling — there is no cache
+            # to wait for.
+            if self.redis_cache is None:
+                return await perform_health_check(
+                    model_list=model_list,
+                    details=details,
+                    max_concurrency=max_concurrency,
+                    health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
                 )
-            
-            # Still no cache, fall back to local health check
+
+            # Lock not acquired — poll for cached results until the lock
+            # holder finishes or the lock expires, rather than falling back
+            # to a redundant local health check after only 2 seconds.
+            verbose_proxy_logger.debug("Pod %s waiting for other pod to complete health check", self.pod_id)
+
+            poll_interval: Final = 5  # seconds between cache checks
+            max_wait: Final = self.lock_ttl  # wait at most as long as the lock can live
+            elapsed = 0
+
+            while elapsed < max_wait:
+                await asyncio.sleep(poll_interval)
+                elapsed += poll_interval
+
+                cached_results = await self.get_cached_health_check_results()
+                if cached_results is not None:
+                    verbose_proxy_logger.info(
+                        "Pod %s using cached health check results after waiting %ds",
+                        self.pod_id,
+                        elapsed,
+                    )
+                    return (
+                        cached_results.get("healthy_endpoints", []),
+                        cached_results.get("unhealthy_endpoints", []),
+                        {},
+                    )
+
+                # Check if the lock is still held — if it was released without
+                # caching (e.g. the holder crashed), stop waiting early.
+                try:
+                    lock_key = self.get_health_check_lock_key()
+                    current_owner = await self.redis_cache.async_get_cache(lock_key)
+                    if current_owner is None:
+                        verbose_proxy_logger.debug(
+                            "Pod %s detected lock released without cache, stopping wait",
+                            self.pod_id,
+                        )
+                        break
+                except Exception:
+                    # Redis hiccup — continue polling rather than crashing out
+                    pass
+
+            # Exhausted wait — fall back to local health check
             verbose_proxy_logger.warning(
-                "Pod %s falling back to local health check (no cache available)", 
-                self.pod_id
+                "Pod %s falling back to local health check after waiting %ds (no cache available)",
+                self.pod_id,
+                elapsed,
             )
-            
-            return await perform_health_check(model_list=model_list, details=details)
+
+            return await perform_health_check(
+                model_list=model_list,
+                details=details,
+                max_concurrency=max_concurrency,
+                health_check_skip_disabled_background_models=health_check_skip_disabled_background_models,
+            )
 
     async def is_health_check_in_progress(self) -> bool:
         """
         Check if a health check is currently in progress by another pod.
-        
+
         Returns:
             bool: True if health check is in progress, False otherwise
         """
@@ -284,23 +322,21 @@ class SharedHealthCheckManager:
             return False
 
         try:
-            lock_key = self.get_health_check_lock_key()
-            current_owner = await self.redis_cache.async_get_cache(lock_key)
+            lock_key: Final = self.get_health_check_lock_key()
+            current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
             return current_owner is not None and current_owner != self.pod_id
         except Exception as e:
-            verbose_proxy_logger.error(
-                "Error checking health check lock status: %s", str(e)
-            )
+            verbose_proxy_logger.error("Error checking health check lock status: %s", str(e))
             return False
 
-    async def get_health_check_status(self) -> Dict[str, Any]:
+    async def get_health_check_status(self) -> dict[str, Any]:
         """
         Get the current status of health check coordination.
-        
+
         Returns:
             Dict containing status information
         """
-        status = {
+        status: Final = {
             "pod_id": self.pod_id,
             "redis_available": self.redis_cache is not None,
             "lock_ttl": self.lock_ttl,
@@ -310,13 +346,13 @@ class SharedHealthCheckManager:
         if self.redis_cache is not None:
             try:
                 # Check if there's a current lock
-                lock_key = self.get_health_check_lock_key()
-                current_owner = await self.redis_cache.async_get_cache(lock_key)
+                lock_key: Final = self.get_health_check_lock_key()
+                current_owner: Final = await self.redis_cache.async_get_cache(lock_key)
                 status["lock_owner"] = current_owner
                 status["lock_in_progress"] = current_owner is not None
 
                 # Check cache status
-                cached_results = await self.get_cached_health_check_results()
+                cached_results: Final = await self.get_cached_health_check_results()
                 status["cache_available"] = cached_results is not None
                 if cached_results:
                     status["cache_age_seconds"] = time.time() - cached_results.get("timestamp", 0)

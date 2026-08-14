@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -54,6 +54,34 @@ class BaseResponsesAPIConfig(ABC):
             and v is not None
         }
 
+    def supports_native_file_search(self) -> bool:
+        """Return True if this provider handles the file_search tool natively.
+
+        Override in provider subclasses that support file_search without
+        LiteLLM emulation (e.g. OpenAI, Azure OpenAI).
+        """
+        return False
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict, bytes | None]:
+        """Sign the request after the body is finalized.
+
+        Default is a no-op (returns headers unchanged, no signed body). Providers
+        whose endpoint requires request signing (e.g. Bedrock Mantle SigV4)
+        override this and return the signed body bytes so the handler sends those
+        exact bytes.
+        """
+        return headers, None
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass
@@ -64,19 +92,17 @@ class BaseResponsesAPIConfig(ABC):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         return {}
 
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -94,11 +120,11 @@ class BaseResponsesAPIConfig(ABC):
     def transform_responses_api_request(
         self,
         model: str,
-        input: Union[str, ResponseInputParam],
-        response_api_optional_request_params: Dict,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     @abstractmethod
@@ -120,7 +146,6 @@ class BaseResponsesAPIConfig(ABC):
         """
         Transform a parsed streaming response chunk into a ResponsesAPIStreamingResponse
         """
-        pass
 
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
@@ -132,7 +157,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         pass
 
     @abstractmethod
@@ -157,7 +182,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         pass
 
     @abstractmethod
@@ -178,12 +203,12 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        before: Optional[str] = None,
-        include: Optional[List[str]] = None,
+        after: str | None = None,
+        before: str | None = None,
+        include: list[str] | None = None,
         limit: int = 20,
         order: Literal["asc", "desc"] = "desc",
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         pass
 
     @abstractmethod
@@ -191,16 +216,14 @@ class BaseResponsesAPIConfig(ABC):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     #########################################################
     ########## END GET RESPONSE API TRANSFORMATION ##########
     #########################################################
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -211,12 +234,47 @@ class BaseResponsesAPIConfig(ABC):
 
     def should_fake_stream(
         self,
-        model: Optional[str],
-        stream: Optional[bool],
-        custom_llm_provider: Optional[str] = None,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         """Returns True if litellm should fake a stream for the given model and stream value"""
         return False
+
+    def supports_native_websocket(self) -> bool:
+        """
+        Returns True if the provider has a native WebSocket endpoint for Responses API.
+
+        Providers with native websocket support can connect directly to wss:// endpoints.
+        Providers without native support will use the ManagedResponsesWebSocketHandler
+        which makes HTTP streaming calls and forwards events over the websocket.
+
+        Default: False (use managed websocket handler)
+        """
+        return False
+
+    def get_websocket_url(
+        self,
+        api_base: str | None,
+        litellm_params: dict,
+    ) -> str:
+        """
+        Return the wss:// URL for the provider's native Responses WebSocket endpoint.
+
+        Defaults to converting the HTTP URL from get_complete_url. Providers whose
+        WebSocket path differs from their HTTP path (e.g. Azure uses
+        /openai/v1/responses without api-version) should override this.
+        """
+        http_url: Final = self.get_complete_url(api_base=api_base, litellm_params=litellm_params)
+        return http_url.replace("https://", "wss://").replace("http://", "ws://")
+
+    def model_in_websocket_url(self) -> bool:
+        """
+        Return True if the model should be appended as a ?model= query param to
+        the WebSocket URL. Providers that identify the model via the request body
+        (e.g. Azure Responses API) should override this to return False.
+        """
+        return True
 
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
@@ -228,7 +286,7 @@ class BaseResponsesAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         pass
 
     @abstractmethod
@@ -242,3 +300,57 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## END CANCEL RESPONSE API TRANSFORMATION #######
     #########################################################
+
+    #########################################################
+    ########## COMPACT RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> tuple[str, dict]:
+        pass
+
+    @abstractmethod
+    def transform_compact_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## END COMPACT RESPONSE API TRANSFORMATION ######
+    #########################################################
+
+    @staticmethod
+    def strip_custom_tool_call_namespace_from_responses_input(
+        input: str | ResponseInputParam,
+    ) -> str | ResponseInputParam:
+        """
+        Remove ``namespace`` from ``custom_tool_call`` input items.
+        """
+        if not isinstance(input, list):
+            return input
+        out: Final[list[Any]] = []
+        for item in input:
+            if isinstance(item, dict) and item.get("type") == "custom_tool_call":
+                out.append({k: v for k, v in item.items() if k != "namespace"})
+            else:
+                out.append(item)
+        return cast(ResponseInputParam, out)
+
+    @staticmethod
+    def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:
+        """Apply provider-agnostic fixes to an outbound Responses API request dict."""
+        if not isinstance(data, dict) or "input" not in data:
+            return data
+        return {
+            **data,
+            "input": BaseResponsesAPIConfig.strip_custom_tool_call_namespace_from_responses_input(data["input"]),
+        }

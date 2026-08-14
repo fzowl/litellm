@@ -1,5 +1,6 @@
 export interface SpendMetrics {
   spend: number;
+  flat_cost?: number;
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -8,13 +9,17 @@ export interface SpendMetrics {
   failed_requests: number;
   cache_read_input_tokens: number;
   cache_creation_input_tokens: number;
+  compression_saved_tokens?: number;
+  compression_savings_spend?: number;
+  prompt_caching_savings_spend?: number;
+  autorouter_savings_spend?: number;
 }
 
-export interface DailyData {
+export type DailyData = {
   date: string;
   metrics: SpendMetrics;
   breakdown: BreakdownMetrics;
-}
+};
 
 export interface BreakdownMetrics {
   models: { [key: string]: MetricWithMetadata };
@@ -23,6 +28,7 @@ export interface BreakdownMetrics {
   providers: { [key: string]: MetricWithMetadata };
   api_keys: { [key: string]: KeyMetricWithMetadata };
   entities: { [key: string]: MetricWithMetadata };
+  endpoints?: { [key: string]: MetricWithMetadata };
 }
 
 export interface MetricWithMetadata {
@@ -51,6 +57,15 @@ export interface TopApiKeyData {
   tokens: number;
 }
 
+export interface TopModelData {
+  model: string;
+  spend: number;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
+
 export interface ModelActivityData {
   label: string;
   total_requests: number;
@@ -63,6 +78,7 @@ export interface ModelActivityData {
   completion_tokens: number;
   total_spend: number;
   top_api_keys: TopApiKeyData[];
+  top_models: TopModelData[];
   daily_data: {
     date: string;
     metrics: {

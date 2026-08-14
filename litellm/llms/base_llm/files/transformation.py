@@ -1,12 +1,16 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, Union
 
 import httpx
+from openai.types.file_deleted import FileDeleted
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
+    FileContentRequest,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -29,6 +33,22 @@ else:
     Router = Any
 
 
+class BaseFileUploadStream(ABC):
+    """Re-iterable request body that yields an upload's bytes lazily.
+
+    A provider returns one of these (inside the upload config from
+    ``transform_create_file_request``) when the upload body can be produced
+    incrementally; the HTTP handler then sends it in bounded chunks instead of
+    buffering the whole payload, which is what exhausts memory on large uploads.
+
+    ``iter_bytes`` must return a fresh iterator each call so the body can be
+    replayed if the upload is retried.
+    """
+
+    @abstractmethod
+    def iter_bytes(self) -> Iterator[bytes]: ...
+
+
 class BaseFilesConfig(BaseConfig):
     @property
     @abstractmethod
@@ -46,15 +66,13 @@ class BaseFilesConfig(BaseConfig):
         return "POST"
 
     @abstractmethod
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAICreateFileRequestOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAICreateFileRequestOptionalParams]:
         pass
 
     def get_complete_file_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
@@ -75,23 +93,102 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, str, bytes]:
-        pass
+    ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
+        """
+        Transform OpenAI-style file creation request into provider-specific format.
+
+        Returns:
+            - dict: For pre-signed single-step uploads (e.g., Bedrock S3)
+            - str/bytes: For traditional file uploads
+            - TwoStepFileUploadConfig: For two-step upload process (e.g., Manus, GCS)
+        """
 
     @abstractmethod
     def transform_create_file_response(
         self,
-        model: Optional[str],
+        model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
         pass
 
+    @abstractmethod
+    def transform_retrieve_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file retrieve request into provider-specific format."""
+
+    @abstractmethod
+    def transform_retrieve_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        """Transform file retrieve response into OpenAI format."""
+
+    @abstractmethod
+    def transform_delete_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file delete request into provider-specific format."""
+
+    @abstractmethod
+    def transform_delete_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> "FileDeleted":
+        """Transform file delete response into OpenAI format."""
+
+    @abstractmethod
+    def transform_list_files_request(
+        self,
+        purpose: str | None,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file list request into provider-specific format."""
+
+    @abstractmethod
+    def transform_list_files_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> list[OpenAIFileObject]:
+        """Transform file list response into OpenAI format."""
+
+    @abstractmethod
+    def transform_file_content_request(
+        self,
+        file_content_request: "FileContentRequest",
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file content request into provider-specific format."""
+
+    @abstractmethod
+    def transform_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> "HttpxBinaryResponseContent":
+        """Transform file content response into OpenAI format."""
+
     def transform_request(
         self,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
@@ -107,12 +204,12 @@ class BaseFilesConfig(BaseConfig):
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         raise NotImplementedError(
             "AudioTranscriptionConfig does not need a response transformation for audio transcription models"
@@ -125,7 +222,7 @@ class BaseFileEndpoints(ABC):
         self,
         create_file_request: CreateFileRequest,
         llm_router: Router,
-        target_model_names_list: List[str],
+        target_model_names_list: list[str],
         litellm_parent_otel_span: Span,
         user_api_key_dict: UserAPIKeyAuth,
     ) -> OpenAIFileObject:
@@ -135,26 +232,27 @@ class BaseFileEndpoints(ABC):
     async def afile_retrieve(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
+        litellm_parent_otel_span: Span | None,
+        llm_router: Router | None = None,
     ) -> OpenAIFileObject:
         pass
 
     @abstractmethod
     async def afile_list(
         self,
-        purpose: Optional[OpenAIFilesPurpose],
-        litellm_parent_otel_span: Optional[Span],
-        **data: Dict,
-    ) -> List[OpenAIFileObject]:
+        purpose: OpenAIFilesPurpose | None,
+        litellm_parent_otel_span: Span | None,
+        **data: dict,
+    ) -> list[OpenAIFileObject]:
         pass
 
     @abstractmethod
     async def afile_delete(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
+        litellm_parent_otel_span: Span | None,
         llm_router: Router,
-        **data: Dict,
+        **data: dict,
     ) -> OpenAIFileObject:
         pass
 
@@ -162,8 +260,8 @@ class BaseFileEndpoints(ABC):
     async def afile_content(
         self,
         file_id: str,
-        litellm_parent_otel_span: Optional[Span],
+        litellm_parent_otel_span: Span | None,
         llm_router: Router,
-        **data: Dict,
+        **data: dict,
     ) -> "HttpxBinaryResponseContent":
         pass

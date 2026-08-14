@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,18 +18,17 @@ else:
 class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     """
     Configuration for Fal AI Flux Pro v1.1-ultra model.
-    
+
     FLUX Pro v1.1-ultra is a high-quality text-to-image model with enhanced detail
     and support for image prompts.
-    
+
     Model endpoint: fal-ai/flux-pro/v1.1-ultra
     Documentation: https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra
     """
+
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/flux-pro/v1.1-ultra"
-    
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Flux Pro v1.1-ultra.
         """
@@ -38,7 +37,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             "response_format",
             "size",
         ]
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -48,28 +47,28 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Map OpenAI parameters to Flux Pro v1.1-ultra parameters.
-        
+
         Mappings:
         - n -> num_images (1-4, default 1)
         - response_format -> output_format (jpeg or png)
         - size -> aspect_ratio (21:9, 16:9, 4:3, 3:2, 1:1, 2:3, 3:4, 9:16, 9:21)
         """
-        supported_params = self.get_supported_openai_params(model)
-        
+        supported_params: Final = self.get_supported_openai_params(model)
+
         # Map OpenAI params to Flux Pro v1.1-ultra params
-        param_mapping = {
+        param_mapping: Final = {
             "n": "num_images",
             "response_format": "output_format",
             "size": "aspect_ratio",
         }
-        
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
                     mapped_value = non_default_params[k]
-                    
+
                     # Transform specific parameters
                     if k == "response_format":
                         # Map OpenAI response formats to image formats
@@ -78,7 +77,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
                     elif k == "size":
                         # Map OpenAI size format to Flux aspect ratio
                         mapped_value = self._map_aspect_ratio(mapped_value)
-                    
+
                     optional_params[mapped_key] = mapped_value
                 elif drop_params:
                     pass
@@ -92,14 +91,14 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     def _map_aspect_ratio(self, size: str) -> str:
         """
         Map OpenAI size format to Flux Pro aspect ratio format.
-        
+
         OpenAI format: "1024x1024", "1792x1024", etc.
         Flux format: "21:9", "16:9", "4:3", "3:2", "1:1", "2:3", "3:4", "9:16", "9:21"
-        
+
         Default: "16:9"
         """
         # Map common OpenAI sizes to Flux aspect ratios
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             "1024x1024": "1:1",
             "512x512": "1:1",
             "1792x1024": "16:9",
@@ -111,20 +110,20 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             "2048x876": "21:9",
             "876x2048": "9:21",
         }
-        
+
         if size in size_to_aspect_ratio:
             return size_to_aspect_ratio[size]
-        
+
         # Parse custom size format "WIDTHxHEIGHT" and calculate aspect ratio
         if "x" in size:
             try:
                 width_str, height_str = size.split("x")
-                width = int(width_str)
-                height = int(height_str)
-                
+                width: Final = int(width_str)
+                height: Final = int(height_str)
+
                 # Calculate aspect ratio and find closest match
-                ratio = width / height
-                
+                ratio: Final = width / height
+
                 # Map to closest supported aspect ratio
                 if 0.95 <= ratio <= 1.05:  # Close to 1:1
                     return "1:1"
@@ -146,7 +145,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
                     return "9:21"
             except (ValueError, AttributeError, ZeroDivisionError):
                 pass
-        
+
         # Default to 16:9
         return "16:9"
 
@@ -160,10 +159,10 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Transform the image generation request to Flux Pro v1.1-ultra request body.
-        
+
         Required parameters:
         - prompt: The prompt to generate an image from
-        
+
         Optional parameters:
         - num_images: Number of images (1-4, default: 1)
         - aspect_ratio: Aspect ratio (default: "16:9")
@@ -177,11 +176,11 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         - image_prompt_strength: Strength of image prompt 0-1 (default: 0.1)
         - enhance_prompt: Enhance prompt for better results (default: false)
         """
-        flux_pro_request_body = {
+        flux_pro_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
-        
+
         return flux_pro_request_body
 
     def transform_image_generation_response(
@@ -194,12 +193,12 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Flux Pro v1.1-ultra response to litellm ImageResponse format.
-        
+
         Expected response format:
         {
             "images": [
@@ -217,19 +216,19 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
-        
+
         # Handle Flux Pro v1.1-ultra response format
-        images = response_data.get("images", [])
+        images: Final = response_data.get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):
@@ -247,7 +246,7 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
                             b64_json=None,
                         )
                     )
-        
+
         # Add additional metadata from Flux Pro response
         if hasattr(model_response, "_hidden_params"):
             if "seed" in response_data:
@@ -255,9 +254,6 @@ class FalAIFluxProV11UltraConfig(FalAIBaseConfig):
             if "timings" in response_data:
                 model_response._hidden_params["timings"] = response_data["timings"]
             if "has_nsfw_concepts" in response_data:
-                model_response._hidden_params["has_nsfw_concepts"] = response_data[
-                    "has_nsfw_concepts"
-                ]
-        
-        return model_response
+                model_response._hidden_params["has_nsfw_concepts"] = response_data["has_nsfw_concepts"]
 
+        return model_response

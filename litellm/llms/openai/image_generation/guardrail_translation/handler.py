@@ -5,10 +5,11 @@ This module provides guardrail translation support for OpenAI's image generation
 The handler processes the 'prompt' parameter for guardrails.
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -31,7 +32,7 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
     ) -> Any:
         """
         Process input prompt by applying guardrails to text content.
@@ -43,27 +44,29 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         Returns:
             Modified data with guardrails applied to prompt
         """
-        prompt = data.get("prompt")
+        prompt: Final = data.get("prompt")
         if prompt is None:
-            verbose_proxy_logger.debug(
-                "OpenAI Image Generation: No prompt found in request data"
-            )
+            verbose_proxy_logger.debug("OpenAI Image Generation: No prompt found in request data")
             return data
 
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs={"texts": [prompt]},
+            inputs: Final = GenericGuardrailAPIInputs(texts=[prompt])
+            # Include model information if available
+            model: Final = data.get("model")
+            if model:
+                inputs["model"] = model
+            guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+                inputs=inputs,
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,
             )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             data["prompt"] = guardrailed_texts[0] if guardrailed_texts else prompt
 
             verbose_proxy_logger.debug(
-                "OpenAI Image Generation: Applied guardrail to prompt. "
-                "Original length: %d, New length: %d",
+                "OpenAI Image Generation: Applied guardrail to prompt. Original length: %d, New length: %d",
                 len(prompt),
                 len(data["prompt"]),
             )
@@ -79,8 +82,9 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         self,
         response: "ImageResponse",
         guardrail_to_apply: "CustomGuardrail",
-        litellm_logging_obj: Optional[Any] = None,
-        user_api_key_dict: Optional[Any] = None,
+        litellm_logging_obj: Any | None = None,
+        user_api_key_dict: Any | None = None,
+        request_data: dict | None = None,
     ) -> Any:
         """
         Process output response - typically not needed for image generation.
@@ -98,7 +102,5 @@ class OpenAIImageGenerationHandler(BaseTranslation):
         Returns:
             Unmodified response (images don't need text guardrails)
         """
-        verbose_proxy_logger.debug(
-            "OpenAI Image Generation: Output processing not needed for image responses"
-        )
+        verbose_proxy_logger.debug("OpenAI Image Generation: Output processing not needed for image responses")
         return response

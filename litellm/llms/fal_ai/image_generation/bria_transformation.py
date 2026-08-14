@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -18,18 +18,17 @@ else:
 class FalAIBriaConfig(FalAIBaseConfig):
     """
     Configuration for Bria Text-to-Image 3.2 model.
-    
+
     Bria 3.2 is a commercial-grade text-to-image model with prompt enhancement
     and multiple aspect ratio options.
-    
+
     Model endpoint: bria/text-to-image/3.2
     Documentation: https://fal.ai/models/bria/text-to-image/3.2
     """
+
     IMAGE_GENERATION_ENDPOINT: str = "bria/text-to-image/3.2"
-    
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIImageGenerationOptionalParams]:
+
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Bria 3.2.
         """
@@ -38,7 +37,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
             "response_format",
             "size",
         ]
-    
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -48,26 +47,26 @@ class FalAIBriaConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Map OpenAI parameters to Bria 3.2 parameters.
-        
+
         Mappings:
         - size -> aspect_ratio (1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9)
         - response_format -> ignored (Bria returns URLs)
         - n -> ignored (Bria doesn't support multiple images in one call)
         """
-        supported_params = self.get_supported_openai_params(model)
-        
+        supported_params: Final = self.get_supported_openai_params(model)
+
         # Map OpenAI params to Bria params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "aspect_ratio",
         }
-        
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
                     mapped_value = non_default_params[k]
-                    
+
                     # Transform specific parameters
                     if k == "response_format":
                         # Bria always returns URLs, so we can ignore this
@@ -78,7 +77,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
                     elif k == "size":
                         # Map OpenAI size format to Bria aspect ratio
                         mapped_value = self._map_aspect_ratio(mapped_value)
-                    
+
                     optional_params[mapped_key] = mapped_value
                 elif drop_params:
                     pass
@@ -92,12 +91,12 @@ class FalAIBriaConfig(FalAIBaseConfig):
     def _map_aspect_ratio(self, size: str) -> str:
         """
         Map OpenAI size format to Bria aspect ratio format.
-        
+
         OpenAI format: "1024x1024", "1792x1024", etc.
         Bria format: "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9"
         """
         # Map common OpenAI sizes to Bria aspect ratios
-        size_to_aspect_ratio = {
+        size_to_aspect_ratio: Final = {
             "1024x1024": "1:1",
             "512x512": "1:1",
             "1792x1024": "16:9",
@@ -107,20 +106,20 @@ class FalAIBriaConfig(FalAIBaseConfig):
             "1280x960": "4:3",
             "960x1280": "3:4",
         }
-        
+
         if size in size_to_aspect_ratio:
             return size_to_aspect_ratio[size]
-        
+
         # Parse custom size format "WIDTHxHEIGHT" and calculate aspect ratio
         if "x" in size:
             try:
                 width_str, height_str = size.split("x")
-                width = int(width_str)
-                height = int(height_str)
-                
+                width: Final = int(width_str)
+                height: Final = int(height_str)
+
                 # Calculate aspect ratio and find closest match
-                ratio = width / height
-                
+                ratio: Final = width / height
+
                 # Map to closest supported aspect ratio
                 if 0.95 <= ratio <= 1.05:  # Close to 1:1
                     return "1:1"
@@ -142,7 +141,7 @@ class FalAIBriaConfig(FalAIBaseConfig):
                     return "4:5"
             except (ValueError, AttributeError, ZeroDivisionError):
                 pass
-        
+
         # Default to 1:1
         return "1:1"
 
@@ -156,10 +155,10 @@ class FalAIBriaConfig(FalAIBaseConfig):
     ) -> dict:
         """
         Transform the image generation request to Bria 3.2 request body.
-        
+
         Required parameters:
         - prompt: Prompt for image generation
-        
+
         Optional parameters:
         - aspect_ratio: "1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9" (default: "1:1")
         - prompt_enhancer: Improve the prompt (default: true)
@@ -170,11 +169,11 @@ class FalAIBriaConfig(FalAIBaseConfig):
         - seed: Random seed for reproducibility (default: 5555)
         - negative_prompt: Negative prompt string
         """
-        bria_request_body = {
+        bria_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
-        
+
         return bria_request_body
 
     def transform_image_generation_response(
@@ -187,12 +186,12 @@ class FalAIBriaConfig(FalAIBaseConfig):
         optional_params: dict,
         litellm_params: dict,
         encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Bria 3.2 response to litellm ImageResponse format.
-        
+
         Expected response format:
         {
             "image": {
@@ -206,19 +205,19 @@ class FalAIBriaConfig(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
-        
+
         if not model_response.data:
             model_response.data = []
-        
+
         # Handle Bria response format - uses "image" (singular) not "images"
-        image_data = response_data.get("image")
+        image_data: Final = response_data.get("image")
         if image_data and isinstance(image_data, dict):
             model_response.data.append(
                 ImageObject(
@@ -226,6 +225,5 @@ class FalAIBriaConfig(FalAIBaseConfig):
                     b64_json=None,  # Bria returns URLs only
                 )
             )
-        
-        return model_response
 
+        return model_response

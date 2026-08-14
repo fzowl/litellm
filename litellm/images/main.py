@@ -1,12 +1,17 @@
 import asyncio
 import contextvars
+import importlib
+from collections.abc import Coroutine
 from functools import partial
-from typing import Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+
+if TYPE_CHECKING:
+    from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
 
 import litellm
-from litellm.utils import exception_type, get_litellm_params
+
 # client is imported from litellm as it's a decorator
 from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
@@ -19,15 +24,20 @@ from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM
+from litellm.utils import exception_type, get_litellm_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
+from openai.types.audio.transcription_create_params import FileTypes
 
+# BFL handlers
+from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
+from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
     base_llm_http_handler,
+    bedrock_image_edit,
     bedrock_image_generation,
     openai_chat_completions,
     openai_image_variations,
@@ -50,7 +60,19 @@ from litellm.utils import (
     get_optional_params_image_gen,
 )
 
-from .utils import ImageEditRequestUtils
+# Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
+_ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
+
+
+def _get_ImageEditRequestUtils() -> "ImageEditRequestUtils":
+    """Get ImageEditRequestUtils, loading it lazily if needed."""
+    global _ImageEditRequestUtils_cache
+    if _ImageEditRequestUtils_cache is None:
+        # Access via module to trigger __getattr__ if not cached
+        module: Final = importlib.import_module(__name__)
+        _ImageEditRequestUtils_cache = module.ImageEditRequestUtils
+    assert _ImageEditRequestUtils_cache is not None  # Type narrowing for type checker
+    return _ImageEditRequestUtils_cache
 
 
 ##### Image Generation #######################
@@ -66,38 +88,34 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
     Returns:
     - `response` (Any): The response returned by the `image_generation` function.
     """
-    loop = asyncio.get_event_loop()
-    model = args[0] if len(args) > 0 else kwargs["model"]
+    loop: Final = asyncio.get_event_loop()
+    model: Final = args[0] if len(args) > 0 else kwargs["model"]
     ### PASS ARGS TO Image Generation ###
     kwargs["aimg_generation"] = True
     custom_llm_provider = None
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(image_generation, *args, **kwargs)
+        func: Final = partial(image_generation, *args, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
-        _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model, api_base=kwargs.get("api_base", None)
-        )
+        _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
-        init_response = await loop.run_in_executor(None, func_with_context)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
-        response: Optional[ImageResponse] = None
+        response: ImageResponse | None = None
         if isinstance(init_response, dict):
             response = ImageResponse(**init_response)
         elif isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
 
         if response is None:
-            raise ValueError(
-                "Unable to get Image Response. Please pass a valid llm_provider."
-            )
+            raise ValueError("Unable to get Image Response. Please pass a valid llm_provider.")
 
         return response
     except Exception as e:
@@ -117,17 +135,17 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
 @overload
 def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     *,
     aimg_generation: Literal[True],
@@ -141,17 +159,17 @@ def image_generation(
 @overload
 def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     *,
     aimg_generation: Literal[False] = False,
@@ -163,52 +181,49 @@ def image_generation(
 
 
 @client
-def image_generation(  # noqa: PLR0915
+def image_generation(
     prompt: str,
-    model: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    style: Optional[str] = None,
-    user: Optional[str] = None,
+    model: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    style: str | None = None,
+    user: str | None = None,
     timeout=600,  # default to 10 minutes
-    api_key: Optional[str] = None,
-    api_base: Optional[str] = None,
-    api_version: Optional[str] = None,
+    api_key: str | None = None,
+    api_base: str | None = None,
+    api_version: str | None = None,
     custom_llm_provider=None,
     **kwargs,
-) -> Union[
-    ImageResponse,
-    Coroutine[Any, Any, ImageResponse],
-]:
+) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
     """
     Maps the https://api.openai.com/v1/images/generations endpoint.
 
     Currently supports just Azure + OpenAI.
     """
     try:
-        args = locals()
-        aimg_generation = kwargs.get("aimg_generation", False)
-        litellm_call_id = kwargs.get("litellm_call_id", None)
-        logger_fn = kwargs.get("logger_fn", None)
-        mock_response: Optional[str] = kwargs.get("mock_response", None)  # type: ignore
-        proxy_server_request = kwargs.get("proxy_server_request", None)
+        args: Final = locals()
+        aimg_generation: Final = kwargs.get("aimg_generation", False)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
+        logger_fn: Final = kwargs.get("logger_fn", None)
+        mock_response: Final[str | None] = kwargs.get("mock_response", None)
+        proxy_server_request: Final = kwargs.get("proxy_server_request", None)
         azure_ad_token_provider = kwargs.get("azure_ad_token_provider", None)
-        model_info = kwargs.get("model_info", None)
-        metadata = kwargs.get("metadata", {})
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        client = kwargs.get("client", None)
-        extra_headers = kwargs.get("extra_headers", None)
-        headers: dict = kwargs.get("headers", None) or {}
-        base_model = kwargs.get("base_model", None)
+        model_info: Final = kwargs.get("model_info", None)
+        metadata: Final = kwargs.get("metadata", {})
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        client: Final = kwargs.get("client", None)
+        extra_headers: Final = kwargs.get("extra_headers", None)
+        headers: Final[dict] = kwargs.get("headers", None) or {}
+        base_model: Final = kwargs.get("base_model", None)
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
-        dynamic_api_key: Optional[str] = None
+        dynamic_api_key: str | None = None
         if model is not None or custom_llm_provider is not None:
             model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-                model=model,  # type: ignore
+                model=model,
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
             )
@@ -216,7 +231,7 @@ def image_generation(  # noqa: PLR0915
             model = "dall-e-2"
             custom_llm_provider = "openai"  # default to dall-e-2 on openai
         model_response._hidden_params["model"] = model
-        openai_params = [
+        openai_params: Final = [
             "user",
             "request_timeout",
             "api_base",
@@ -233,25 +248,20 @@ def image_generation(  # noqa: PLR0915
             "size",
             "style",
         ]
-        litellm_params = all_litellm_params
-        default_params = openai_params + litellm_params
-        non_default_params = {
+        litellm_params: Final = all_litellm_params
+        default_params: Final = openai_params + litellm_params
+        non_default_params: Final = {
             k: v for k, v in kwargs.items() if k not in default_params
         }  # model-specific params - pass them straight to the model/provider
 
-        image_generation_config: Optional[BaseImageGenerationConfig] = None
-        if (
-            custom_llm_provider is not None
-            and custom_llm_provider in LlmProviders._member_map_.values()
-        ):
-            image_generation_config = (
-                ProviderConfigManager.get_provider_image_generation_config(
-                    model=base_model or model,
-                    provider=LlmProviders(custom_llm_provider),
-                )
+        image_generation_config: BaseImageGenerationConfig | None = None
+        if custom_llm_provider is not None and custom_llm_provider in LlmProviders._member_map_.values():
+            image_generation_config = ProviderConfigManager.get_provider_image_generation_config(
+                model=base_model or model,
+                provider=LlmProviders(custom_llm_provider),
             )
 
-        optional_params = get_optional_params_image_gen(
+        optional_params: Final = get_optional_params_image_gen(
             model=base_model or model,
             n=n,
             quality=quality,
@@ -264,10 +274,11 @@ def image_generation(  # noqa: PLR0915
             **non_default_params,
         )
 
-        litellm_params_dict = get_litellm_params(**kwargs)
+        litellm_params_dict: Final = get_litellm_params(**kwargs)
 
-        logging: Logging = litellm_logging_obj
-        logging.update_environment_variables(
+        logging: Final[Logging] = litellm_logging_obj
+        logging.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=optional_params,
@@ -278,7 +289,6 @@ def image_generation(  # noqa: PLR0915
                 "logger_fn": logger_fn,
                 "proxy_server_request": proxy_server_request,
                 "model_info": model_info,
-                "metadata": metadata,
                 "preset_cache_key": None,
                 "stream_response": {},
             },
@@ -291,15 +301,11 @@ def image_generation(  # noqa: PLR0915
 
         if custom_llm_provider == "azure":
             # azure configs
-            api_type = get_secret_str("AZURE_API_TYPE") or "azure"
+            api_type: Final = get_secret_str("AZURE_API_TYPE") or "azure"
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = (
-                api_version
-                or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-            )
+            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
 
             api_key = (
                 api_key
@@ -309,14 +315,42 @@ def image_generation(  # noqa: PLR0915
                 or get_secret_str("AZURE_API_KEY")
             )
 
-            azure_ad_token = optional_params.pop(
-                "azure_ad_token", None
-            ) or get_secret_str("AZURE_AD_TOKEN")
+            azure_ad_token_param: Final = optional_params.pop("azure_ad_token", None)
+            azure_ad_token: Final = (
+                azure_ad_token_param
+                if isinstance(azure_ad_token_param, str) and azure_ad_token_param
+                else get_secret_str("AZURE_AD_TOKEN")
+            )
+
+            # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
+            if azure_ad_token_provider is None:
+                from litellm.llms.azure.common_utils import (
+                    get_azure_ad_token_from_entra_id,
+                )
+
+                # Extract Azure AD credentials from litellm_params
+                tenant_id: Final = litellm_params_dict.get("tenant_id")
+                client_id: Final = litellm_params_dict.get("client_id")
+                client_secret: Final = litellm_params_dict.get("client_secret")
+                azure_scope = litellm_params_dict.get("azure_scope") or "https://cognitiveservices.azure.com/.default"
+
+                # Create token provider if credentials are available
+                if tenant_id and client_id and client_secret:
+                    azure_ad_token_provider = get_azure_ad_token_from_entra_id(
+                        tenant_id=tenant_id,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        scope=azure_scope,
+                    )
 
             default_headers = {
                 "Content-Type": "application/json",
-                "api-key": api_key,
             }
+            # Only add api-key header if api_key is not None
+            # Azure AD authentication will use Authorization header instead
+            if api_key is not None:
+                default_headers["api-key"] = api_key
+
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -349,14 +383,14 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
+            litellm.LlmProviders.OPENROUTER,
+            litellm.LlmProviders.DASHSCOPE,
         ):
             if image_generation_config is None:
-                raise ValueError(
-                    f"image generation config is not supported for {custom_llm_provider}"
-                )
+                raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
 
             # Resolve api_base from litellm.api_base if not explicitly provided
-            _api_base = api_base or litellm.api_base
+            _api_base: Final = api_base or litellm.api_base
             litellm_params_dict["api_base"] = _api_base
 
             return llm_http_handler.image_generation_handler(
@@ -371,6 +405,22 @@ def image_generation(  # noqa: PLR0915
                 timeout=timeout,
                 client=client,
             )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            return bfl_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                aimg_generation=aimg_generation,
+            )
         elif custom_llm_provider == "azure_ai":
             from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 
@@ -381,8 +431,12 @@ def image_generation(  # noqa: PLR0915
 
             default_headers = {
                 "Content-Type": "application/json",
-                "api-key": api_key,
             }
+            # Only add api-key header if api_key is not None
+            # Azure AD authentication will use Authorization header instead
+            if api_key is not None:
+                default_headers["api-key"] = api_key
+
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -409,8 +463,10 @@ def image_generation(  # noqa: PLR0915
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if extra_headers is not None:
+                optional_params["extra_headers"] = extra_headers
             # Forward OpenAI organization if present (set by proxy pre-call utils)
-            organization: Optional[str] = kwargs.get("organization", None)
+            organization: Final[str | None] = kwargs.get("organization", None)
             model_response = openai_chat_completions.image_generation(
                 model=model,
                 prompt=prompt,
@@ -423,11 +479,12 @@ def image_generation(  # noqa: PLR0915
                 organization=organization,
                 aimg_generation=aimg_generation,
                 client=client,
+                headers=headers,
             )
         elif custom_llm_provider == "bedrock":
             if model is None:
                 raise Exception("Model needs to be set for bedrock")
-            model_response = bedrock_image_generation.image_generation(  # type: ignore
+            model_response = bedrock_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 timeout=timeout,
@@ -439,28 +496,24 @@ def image_generation(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
             )
-        elif (
-            custom_llm_provider in litellm._custom_providers
-        ):  # Assume custom LLM provider
+        elif custom_llm_provider in litellm._custom_providers:  # Assume custom LLM provider
             # Get the Custom Handler
-            custom_handler: Optional[CustomLLM] = None
+            custom_handler: CustomLLM | None = None
             for item in litellm.custom_provider_map:
                 if item["provider"] == custom_llm_provider:
                     custom_handler = item["custom_handler"]
 
             if custom_handler is None:
-                raise LiteLLMUnknownProvider(
-                    model=model, custom_llm_provider=custom_llm_provider
-                )
+                raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
 
             ## ROUTE LLM CALL ##
             if aimg_generation is True:
-                async_custom_client: Optional[AsyncHTTPHandler] = None
+                async_custom_client: AsyncHTTPHandler | None = None
                 if client is not None and isinstance(client, AsyncHTTPHandler):
                     async_custom_client = client
 
                 ## CALL FUNCTION
-                model_response = custom_handler.aimage_generation(  # type: ignore
+                model_response = custom_handler.aimage_generation(
                     model=model,
                     prompt=prompt,
                     api_key=api_key,
@@ -472,7 +525,7 @@ def image_generation(  # noqa: PLR0915
                     client=async_custom_client,
                 )
             else:
-                custom_client: Optional[HTTPHandler] = None
+                custom_client: HTTPHandler | None = None
                 if client is not None and isinstance(client, HTTPHandler):
                     custom_client = client
 
@@ -513,34 +566,30 @@ async def aimage_variation(*args, **kwargs) -> ImageResponse:
     Returns:
     - `response` (Any): The response returned by the `image_variation` function.
     """
-    loop = asyncio.get_event_loop()
-    model = kwargs.get("model", None)
+    loop: Final = asyncio.get_event_loop()
+    model: Final = kwargs.get("model", None)
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
     ### PASS ARGS TO Image Generation ###
     kwargs["async_call"] = True
     try:
         # Use a partial function to pass your keyword arguments
-        func = partial(image_variation, *args, **kwargs)
+        func: Final = partial(image_variation, *args, **kwargs)
 
         # Add the context to the function
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
 
         if custom_llm_provider is None and model is not None:
-            _, custom_llm_provider, _, _ = get_llm_provider(
-                model=model, api_base=kwargs.get("api_base", None)
-            )
+            _, custom_llm_provider, _, _ = get_llm_provider(model=model, api_base=kwargs.get("api_base", None))
 
         # Await normally
         init_response = await loop.run_in_executor(None, func_with_context)
-        if isinstance(init_response, dict) or isinstance(
-            init_response, ImageResponse
-        ):  ## CACHING SCENARIO
+        if isinstance(init_response, dict) or isinstance(init_response, ImageResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
                 init_response = ImageResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response  # type: ignore
+            response = await init_response
         else:
             # Call the synchronous function using run_in_executor
             response = await loop.run_in_executor(None, func_with_context)
@@ -562,17 +611,17 @@ def image_variation(
     model: str = "dall-e-2",  # set to dall-e-2 by default - like OpenAI.
     n: int = 1,
     response_format: Literal["url", "b64_json"] = "url",
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+    size: str | None = None,
+    user: str | None = None,
     **kwargs,
 ) -> ImageResponse:
     # get non-default params
-    client = kwargs.get("client", None)
+    client: Final = kwargs.get("client", None)
     # get logging object
-    litellm_logging_obj = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
+    litellm_logging_obj: Final = cast(LiteLLMLoggingObj, kwargs.get("litellm_logging_obj"))
 
     # get the litellm params
-    litellm_params = get_litellm_params(**kwargs)
+    litellm_params: Final = get_litellm_params(**kwargs)
     # get the custom llm provider
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
@@ -583,17 +632,17 @@ def image_variation(
 
     # route to the correct provider w/ the params
     try:
-        llm_provider = LlmProviders(custom_llm_provider)
-        image_variation_provider = LITELLM_IMAGE_VARIATION_PROVIDERS(llm_provider)
+        llm_provider: Final = LlmProviders(custom_llm_provider)
+        image_variation_provider: Final = LITELLM_IMAGE_VARIATION_PROVIDERS(llm_provider)
     except ValueError:
         raise ValueError(
             f"Invalid image variation provider: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
-    model_response = ImageResponse()
+    model_response: Final = ImageResponse()
 
-    response: Optional[ImageResponse] = None
+    response: ImageResponse | None = None
 
-    provider_config = ProviderConfigManager.get_provider_model_info(
+    provider_config: Final = ProviderConfigManager.get_provider_model_info(
         model=model or "",  # openai defaults to dall-e-2
         provider=llm_provider,
     )
@@ -603,7 +652,7 @@ def image_variation(
             f"image variation provider has no known model info config - required for getting api keys, etc.: {custom_llm_provider}. Supported providers are: {LITELLM_IMAGE_VARIATION_PROVIDERS}"
         )
 
-    api_key = provider_config.get_api_key(litellm_params.get("api_key", None))
+    api_key: Final = provider_config.get_api_key(litellm_params.get("api_key", None))
     api_base = provider_config.get_api_base(litellm_params.get("api_base", None))
 
     if image_variation_provider == LITELLM_IMAGE_VARIATION_PROVIDERS.OPENAI:
@@ -654,39 +703,64 @@ def image_variation(
 
 @client
 def image_edit(
-    image: Union[FileTypes, List[FileTypes]],
-    prompt: str,
-    model: Optional[str] = None,
-    mask: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+    image: FileTypes | list[FileTypes] | None = None,
+    prompt: str | None = None,
+    model: str | None = None,
+    mask: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
-) -> Union[ImageResponse, Coroutine[Any, Any, ImageResponse]]:
+) -> ImageResponse | Coroutine[Any, Any, ImageResponse]:
     """
     Maps the image edit functionality, similar to OpenAI's images/edits endpoint.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
-        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
-        _is_async = kwargs.pop("async_call", False) is True
+        openai_params: Final = [
+            "user",
+            "request_timeout",
+            "api_base",
+            "api_version",
+            "api_key",
+            "deployment_id",
+            "organization",
+            "base_url",
+            "default_headers",
+            "timeout",
+            "max_retries",
+            "n",
+            "quality",
+            "size",
+            "style",
+            "async_call",
+        ]
+        litellm_params_list: Final = all_litellm_params
+        default_params: Final = openai_params + litellm_params_list
+        non_default_params: Final = {
+            k: v for k, v in kwargs.items() if k not in default_params
+        }  # model-specific params - pass them straight to the model/provider
+        litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
+        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        model_info: Final = kwargs.get("model_info", None)
+        metadata: Final = kwargs.get("metadata", {})
+        _is_async: Final = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
-        images = image if isinstance(image, list) else [image]
+        images: Final = image if isinstance(image, list) else ([image] if image is not None else [])
 
-        headers_from_kwargs = kwargs.get("headers")
-        merged_extra_headers: Dict[str, Any] = {}
+        headers_from_kwargs: Final = kwargs.get("headers")
+        merged_extra_headers: Final[dict[str, Any]] = {}
         if isinstance(headers_from_kwargs, dict):
             merged_extra_headers.update(headers_from_kwargs)
         if isinstance(extra_headers, dict):
@@ -696,18 +770,63 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Check for custom provider
+        if custom_llm_provider in litellm._custom_providers:
+            custom_handler: CustomLLM | None = None
+            for item in litellm.custom_provider_map:
+                if item["provider"] == custom_llm_provider:
+                    custom_handler = item["custom_handler"]
+
+            if custom_handler is None:
+                raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
+
+            model_response: Final = ImageResponse()
+
+            if _is_async:
+                async_custom_client: AsyncHTTPHandler | None = None
+                if kwargs.get("client") is not None and isinstance(kwargs.get("client"), AsyncHTTPHandler):
+                    async_custom_client = kwargs.get("client")
+
+                return custom_handler.aimage_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=async_custom_client,
+                )
+            else:
+                custom_client: HTTPHandler | None = None
+                if kwargs.get("client") is not None and isinstance(kwargs.get("client"), HTTPHandler):
+                    custom_client = kwargs.get("client")
+
+                return custom_handler.image_edit(
+                    model=model,
+                    image=images,
+                    prompt=prompt,
+                    model_response=model_response,
+                    api_key=kwargs.get("api_key"),
+                    api_base=kwargs.get("api_base"),
+                    optional_params=kwargs,
+                    logging_obj=litellm_logging_obj,
+                    timeout=timeout,
+                    client=custom_client,
+                )
+
         # get provider config
-        image_edit_provider_config: Optional[BaseImageEditConfig] = (
-            ProviderConfigManager.get_provider_image_edit_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
-            )
+        image_edit_provider_config: BaseImageEditConfig | None = ProviderConfigManager.get_provider_image_edit_config(
+            model=model,
+            provider=litellm.LlmProviders(custom_llm_provider),
         )
 
         if image_edit_provider_config is None:
@@ -715,31 +834,85 @@ def image_edit(
 
         local_vars.update(kwargs)
         # Get ImageEditOptionalRequestParams with only valid parameters
-        image_edit_optional_params: ImageEditOptionalRequestParams = (
-            ImageEditRequestUtils.get_requested_image_edit_optional_param(local_vars)
+        image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
+            _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(local_vars)
         )
-
         # Get optional parameters for the responses API
-        image_edit_request_params: Dict = (
-            ImageEditRequestUtils.get_optional_params_image_edit(
-                model=model,
-                image_edit_provider_config=image_edit_provider_config,
-                image_edit_optional_params=image_edit_optional_params,
-            )
+        image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
+            model=model,
+            image_edit_provider_config=image_edit_provider_config,
+            image_edit_optional_params=image_edit_optional_params,
+            drop_params=kwargs.get("drop_params"),
+            additional_drop_params=kwargs.get("additional_drop_params"),
         )
 
         # Pre Call logging
-        litellm_logging_obj.update_environment_variables(
+        litellm_logging_obj.update_from_kwargs(
+            kwargs=kwargs,
             model=model,
             user=user,
             optional_params=dict(image_edit_request_params),
             litellm_params={
-                "litellm_call_id": litellm_call_id,
                 **image_edit_request_params,
+                "litellm_call_id": litellm_call_id,
+                "model_info": model_info,
             },
             custom_llm_provider=custom_llm_provider,
         )
 
+        # Route bedrock to its specific handler (AWS signing required)
+        if custom_llm_provider == "bedrock":
+            if model is None:
+                raise Exception("Model needs to be set for bedrock")
+            image_edit_request_params.update(non_default_params)
+            return bedrock_image_edit.image_edit(
+                model=model,
+                image=images,
+                prompt=prompt,
+                timeout=timeout,
+                logging_obj=litellm_logging_obj,
+                optional_params=image_edit_request_params,
+                model_response=ImageResponse(),
+                aimage_edit=_is_async,
+                client=kwargs.get("client"),
+                api_base=kwargs.get("api_base"),
+                extra_headers=extra_headers,
+                api_key=kwargs.get("api_key"),
+            )
+        elif custom_llm_provider == "stability":
+            image_edit_request_params.update(non_default_params)
+            return base_llm_http_handler.image_edit_handler(
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_provider_config=image_edit_provider_config,
+                image_edit_optional_request_params=image_edit_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+            )
+        elif custom_llm_provider == "black_forest_labs":
+            # Route to BFL-specific handler (polling required)
+            if model is None:
+                raise Exception("Model needs to be set for black_forest_labs")
+            image_edit_request_params.update(non_default_params)
+            return bfl_image_edit.image_edit(
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_optional_request_params=image_edit_request_params,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                extra_headers=extra_headers,
+                client=kwargs.get("client"),
+                aimage_edit=_is_async,
+            )
         # Call the handler with _is_async flag instead of directly calling the async handler
         return base_llm_http_handler.image_edit_handler(
             model=model,
@@ -769,23 +942,23 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: Union[FileTypes, List[FileTypes]],
+    image: FileTypes | list[FileTypes],
     model: str,
     prompt: str,
-    mask: Optional[str] = None,
-    n: Optional[int] = None,
-    quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
-    response_format: Optional[str] = None,
-    size: Optional[str] = None,
-    user: Optional[str] = None,
+    mask: str | None = None,
+    n: int | None = None,
+    quality: str | ImageGenerationRequestQuality | None = None,
+    response_format: str | None = None,
+    size: str | None = None,
+    user: str | None = None,
     # Use the following arguments if you need to pass additional parameters to the API that aren't available via kwargs.
     # The extra values given here take precedence over values defined on the client or passed to this method.
-    extra_headers: Optional[Dict[str, Any]] = None,
-    extra_query: Optional[Dict[str, Any]] = None,
-    extra_body: Optional[Dict[str, Any]] = None,
-    timeout: Optional[Union[float, httpx.Timeout]] = None,
+    extra_headers: dict[str, Any] | None = None,
+    extra_query: dict[str, Any] | None = None,
+    extra_body: dict[str, Any] | None = None,
+    timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
-    custom_llm_provider: Optional[str] = None,
+    custom_llm_provider: str | None = None,
     **kwargs,
 ) -> ImageResponse:
     """
@@ -798,9 +971,9 @@ async def aimage_edit(
     Returns:
     - `response` (Any): The response returned by the `image_edit` function.
     """
-    local_vars = locals()
+    local_vars: Final = locals()
     try:
-        loop = asyncio.get_event_loop()
+        loop: Final = asyncio.get_event_loop()
         kwargs["async_call"] = True
 
         # get custom llm provider so we can use this for mapping exceptions
@@ -809,9 +982,9 @@ async def aimage_edit(
                 model=model, api_base=local_vars.get("base_url", None)
             )
 
-        images = image if isinstance(image, list) else [image]
+        images: Final = image if isinstance(image, list) else [image]
 
-        func = partial(
+        func: Final = partial(
             image_edit,
             image=images,
             prompt=prompt,
@@ -827,9 +1000,9 @@ async def aimage_edit(
             **kwargs,
         )
 
-        ctx = contextvars.copy_context()
-        func_with_context = partial(ctx.run, func)
-        init_response = await loop.run_in_executor(None, func_with_context)
+        ctx: Final = contextvars.copy_context()
+        func_with_context: Final = partial(ctx.run, func)
+        init_response: Final = await loop.run_in_executor(None, func_with_context)
 
         if asyncio.iscoroutine(init_response):
             response = await init_response
@@ -845,3 +1018,16 @@ async def aimage_edit(
             completion_kwargs=local_vars,
             extra_kwargs=kwargs,
         )
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for images.main module"""
+    if name == "ImageEditRequestUtils":
+        # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
+        from .utils import ImageEditRequestUtils as _ImageEditRequestUtils
+
+        # Cache it in the module's __dict__ for subsequent accesses
+        module: Final = importlib.import_module(__name__)
+        module.__dict__["ImageEditRequestUtils"] = _ImageEditRequestUtils
+        return _ImageEditRequestUtils
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

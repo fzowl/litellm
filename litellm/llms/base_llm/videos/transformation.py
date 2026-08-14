@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from httpx._types import RequestFiles
@@ -11,6 +11,7 @@ from litellm.types.videos.main import VideoCreateOptionalRequestParams
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.types.videos.main import CharacterObject as _CharacterObject
     from litellm.types.videos.main import VideoObject as _VideoObject
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
@@ -18,10 +19,12 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
     VideoObject = _VideoObject
+    CharacterObject = _CharacterObject
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
     VideoObject = Any
+    CharacterObject = Any
 
 
 class BaseVideoConfig(ABC):
@@ -57,7 +60,7 @@ class BaseVideoConfig(ABC):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> Dict:
+    ) -> dict:
         pass
 
     @abstractmethod
@@ -65,8 +68,8 @@ class BaseVideoConfig(ABC):
         self,
         headers: dict,
         model: str,
-        api_key: Optional[str] = None,
-        litellm_params: Optional[GenericLiteLLMParams] = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
     ) -> dict:
         return {}
 
@@ -74,7 +77,7 @@ class BaseVideoConfig(ABC):
     def get_complete_url(
         self,
         model: str,
-        api_base: Optional[str],
+        api_base: str | None,
         litellm_params: dict,
     ) -> str:
         """
@@ -94,10 +97,10 @@ class BaseVideoConfig(ABC):
         model: str,
         prompt: str,
         api_base: str,
-        video_create_optional_request_params: Dict,
+        video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[Dict, RequestFiles, str]:
+    ) -> tuple[dict, RequestFiles, str]:
         pass
 
     @abstractmethod
@@ -106,8 +109,8 @@ class BaseVideoConfig(ABC):
         model: str,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-        request_data: Optional[Dict] = None,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
     ) -> VideoObject:
         pass
 
@@ -118,14 +121,14 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+        variant: str | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video content request into a URL and data/params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video content request
         """
-        pass
 
     @abstractmethod
     def transform_video_content_response(
@@ -144,13 +147,13 @@ class BaseVideoConfig(ABC):
         Async transform video content download response to bytes.
         Optional method - providers can override if they need async transformations
         (e.g., RunwayML for downloading video from CloudFront URL).
-        
+
         Default implementation falls back to sync transform_video_content_response.
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             Video content as bytes
         """
@@ -168,22 +171,21 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video remix request into a URL and data
-        
+
         Returns:
             Tuple[str, Dict]: (url, data) for the video remix request
         """
-        pass
 
     @abstractmethod
     def transform_video_remix_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         pass
 
@@ -193,26 +195,25 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        after: Optional[str] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-        extra_query: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, Dict]:
+        after: str | None = None,
+        limit: int | None = None,
+        order: str | None = None,
+        extra_query: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
         """
         Transform the video list request into a URL and params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video list request
         """
-        pass
 
     @abstractmethod
     def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
-    ) -> Dict[str,str]:
+        custom_llm_provider: str | None = None,
+    ) -> dict[str, str]:
         pass
 
     @abstractmethod
@@ -222,14 +223,13 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the video delete request into a URL and data
-        
+
         Returns:
             Tuple[str, Dict]: (url, data) for the video delete request
         """
-        pass
 
     @abstractmethod
     def transform_video_delete_response(
@@ -246,27 +246,139 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform the video retrieve request into a URL and data/params
-        
+
         Returns:
             Tuple[str, Dict]: (url, params) for the video retrieve request
         """
-        pass
 
     @abstractmethod
     def transform_video_status_retrieve_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> VideoObject:
         pass
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def transform_video_create_character_request(
+        self,
+        name: str,
+        video: Any,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> tuple[str, list]:
+        """
+        Transform the video create character request into a URL and files list (multipart).
+
+        Returns:
+            Tuple[str, list]: (url, files_list) for the multipart POST request
+        """
+        raise NotImplementedError("video create character is not supported for this provider")
+
+    def transform_video_create_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
+        raise NotImplementedError("video create character is not supported for this provider")
+
+    def transform_video_get_character_request(
+        self,
+        character_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> tuple[str, dict]:
+        """
+        Transform the video get character request into a URL and params.
+
+        Returns:
+            Tuple[str, Dict]: (url, params) for the GET request
+        """
+        raise NotImplementedError("video get character is not supported for this provider")
+
+    def transform_video_get_character_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> CharacterObject:
+        raise NotImplementedError("video get character is not supported for this provider")
+
+    def get_video_edit_prefetch_params(
+        self,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> tuple[str, dict] | None:
+        """
+        Return (url, body) for a pre-fetch HTTP call that must be made before
+        transform_video_edit_request, or None if no pre-fetch is required.
+
+        Providers that need to retrieve the source video before constructing the
+        edit request (e.g. Vertex AI) should override this method.  The handler
+        uses the existing shared httpx client so the call is properly async.
+        """
+        return None
+
+    def transform_video_edit_request(
+        self,
+        prompt: str,
+        video_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: dict[str, Any] | None = None,
+        prefetched_source_data: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
+        """
+        Transform the video edit request into a URL and JSON data.
+
+        Returns:
+            Tuple[str, Dict]: (url, data) for the POST request
+        """
+        raise NotImplementedError("video edit is not supported for this provider")
+
+    def transform_video_edit_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+        request_data: dict | None = None,
+    ) -> VideoObject:
+        raise NotImplementedError("video edit is not supported for this provider")
+
+    def transform_video_extension_request(
+        self,
+        prompt: str,
+        video_id: str,
+        seconds: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+        extra_body: dict[str, Any] | None = None,
+    ) -> tuple[str, dict]:
+        """
+        Transform the video extension request into a URL and JSON data.
+
+        Returns:
+            Tuple[str, Dict]: (url, data) for the POST request
+        """
+        raise NotImplementedError("video extension is not supported for this provider")
+
+    def transform_video_extension_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
+        raise NotImplementedError("video extension is not supported for this provider")
+
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(

@@ -1,19 +1,24 @@
 import re
+from copy import deepcopy
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
+from typing import Any, Final, Literal, get_type_hints
 
 import httpx
 
 import litellm
-from litellm.utils import supports_response_schema, supports_system_messages
 from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_PROVIDER_METADATA_FIELDS,
+    PartType,
+    Schema,
+)
 from litellm.types.utils import TokenCountResponse
+from litellm.utils import supports_response_schema, supports_system_messages
 
 
 class VertexAIError(BaseLLMException):
@@ -21,9 +26,97 @@ class VertexAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Optional[Union[Dict, httpx.Headers]] = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+def redact_vertex_ai_metadata_from_logged_object(obj: Any) -> None:
+    if isinstance(obj, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            if field in obj:
+                obj[field] = []
+        hidden_params = obj.get("_hidden_params")
+        if isinstance(hidden_params, dict):
+            for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+                hidden_params.pop(field, None)
+        return
+
+    for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+        if hasattr(obj, field):
+            setattr(obj, field, [])
+    hidden_params = getattr(obj, "_hidden_params", None)
+    if isinstance(hidden_params, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+    """
+    success_handler() merges response._hidden_params into
+    litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
+    metadata must be scrubbed from that copy too.
+    """
+    litellm_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        hidden_params = metadata.get("hidden_params")
+        if not isinstance(hidden_params, dict):
+            continue
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
+def vertex_request_labels_from_litellm_params(
+    litellm_params: dict | None,
+) -> dict[str, str] | None:
+    """
+    Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
+    ``metadata`` (``completion(..., metadata=...)``) or ``litellm_metadata``,
+    using ``requester_metadata`` string key-value pairs (same convention as Gemini).
+    ``metadata`` is tried first when both are present.
+    """
+    if not litellm_params:
+        return None
+    for key in ("metadata", "litellm_metadata"):
+        if key not in litellm_params:
+            continue
+        metadata = litellm_params[key]
+        if metadata is None or not isinstance(metadata, dict):
+            continue
+        if "requester_metadata" not in metadata:
+            continue
+        rm = metadata["requester_metadata"]
+        if not isinstance(rm, dict):
+            continue
+        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        if labels:
+            return labels
+    return None
+
+
+def pop_vertex_request_labels(
+    optional_params: dict | None,
+    litellm_params: dict | None,
+) -> dict[str, str] | None:
+    """
+    Resolve labels from optional ``labels`` (Gemini-style) and/or
+    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
+    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    """
+    labels: dict[str, str] | None = None
+    if optional_params is not None and "labels" in optional_params:
+        raw: Final = optional_params.pop("labels")
+        if isinstance(raw, dict):
+            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
+    if not labels:
+        labels = vertex_request_labels_from_litellm_params(litellm_params)
+    return labels if labels else None
 
 
 class VertexAIModelRoute(str, Enum):
@@ -36,17 +129,18 @@ class VertexAIModelRoute(str, Enum):
     MODEL_GARDEN = "model_garden"
     NON_GEMINI = "non_gemini"
     OPENAI_COMPATIBLE = "openai"
+    AGENT_ENGINE = "agent_engine"
 
-VERTEX_AI_MODEL_ROUTES = [f"{route.value}/" for route in VertexAIModelRoute]
 
-def get_vertex_ai_model_route(
-    model: str, litellm_params: Optional[dict] = None
-) -> VertexAIModelRoute:
+VERTEX_AI_MODEL_ROUTES: Final = [f"{route.value}/" for route in VertexAIModelRoute]
+
+
+def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) -> VertexAIModelRoute:
     """
     Determine which handler to use for a Vertex AI model based on the model name.
 
     Args:
-        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "xai/grok-4.1-fast-non-reasoning")
         litellm_params: Optional litellm parameters dict that may contain base_model for routing
 
     Returns:
@@ -62,9 +156,9 @@ def get_vertex_ai_model_route(
         >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
         VertexAIModelRoute.GEMMA
 
-        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        >>> get_vertex_ai_model_route("xai/grok-4.1-fast-non-reasoning")
         VertexAIModelRoute.MODEL_GARDEN
-        
+
         >>> get_vertex_ai_model_route("1234567890", {"api_base": "http://10.96.32.8"})
         VertexAIModelRoute.GEMINI  # Numeric endpoints with api_base use HTTP path
     """
@@ -76,26 +170,33 @@ def get_vertex_ai_model_route(
     if litellm_params and litellm_params.get("base_model") is not None:
         if "gemini" in litellm_params["base_model"]:
             return VertexAIModelRoute.GEMINI
-    
+
+    # Check for agent_engine models (Reasoning Engines)
+    if "agent_engine/" in model:
+        return VertexAIModelRoute.AGENT_ENGINE
+
     # Check if numeric endpoint ID with custom api_base (PSC endpoint)
     # Route to GEMINI (HTTP path) to support PSC endpoints properly
     if model.isdigit() and litellm_params and litellm_params.get("api_base"):
         return VertexAIModelRoute.GEMINI
-    
+
     # Check for partner models (llama, mistral, claude, etc.)
     if VertexAIPartnerModels.is_vertex_partner_model(model=model):
         return VertexAIModelRoute.PARTNER_MODELS
-    
+
     # Check for BGE models
     if "bge/" in model or "bge" in model.lower():
         return VertexAIModelRoute.BGE
-    
+
     # Check for gemma models
     if "gemma/" in model:
         return VertexAIModelRoute.GEMMA
 
-    # Check for model garden openai models
-    if "openai" in model:
+    # Check for model garden OpenAI-compatible publisher models.
+    # Examples:
+    # - openai/gpt-oss-120b-maas
+    # - xai/grok-4.1-fast-non-reasoning
+    if "openai" in model or model.startswith("xai/"):
         return VertexAIModelRoute.MODEL_GARDEN
 
     # Check for gemini models
@@ -113,18 +214,15 @@ def get_supports_system_message(
         _custom_llm_provider = custom_llm_provider
         if custom_llm_provider == "vertex_ai_beta":
             _custom_llm_provider = "vertex_ai"
-        supports_system_message = supports_system_messages(
-            model=model, custom_llm_provider=_custom_llm_provider
-        )
+        supports_system_message = supports_system_messages(model=model, custom_llm_provider=_custom_llm_provider)
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
         if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
-            "Unable to identify if system message supported. Defaulting to 'False'. Received error message - {}\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json".format(
-                str(e)
-            )
+            "Unable to identify if system message supported. Defaulting to 'False'. Received error message - %s\nAdd it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json",
+            e,
         )
         supports_system_message = False
 
@@ -138,44 +236,68 @@ def get_supports_response_schema(
     if custom_llm_provider == "vertex_ai_beta":
         _custom_llm_provider = "vertex_ai"
 
-    _supports_response_schema = supports_response_schema(
-        model=model, custom_llm_provider=_custom_llm_provider
-    )
+    _supports_response_schema: Final = supports_response_schema(model=model, custom_llm_provider=_custom_llm_provider)
 
     return _supports_response_schema
 
 
-from typing import Literal, Optional
+def supports_response_json_schema(model: str) -> bool:
+    """
+    Check if the model supports responseJsonSchema (JSON Schema format).
 
-all_gemini_url_modes = Literal[
-    "chat", "embedding", "batch_embedding", "image_generation", "count_tokens"
-]
+    responseJsonSchema is supported by Gemini 2.0+ models and uses standard
+    JSON Schema format with lowercase types (string, object, etc.) instead of
+    the OpenAPI-style responseSchema with uppercase types (STRING, OBJECT, etc.).
+
+    Benefits of responseJsonSchema:
+    - Supports additionalProperties for stricter schema validation
+    - Uses standard JSON Schema format (no type conversion needed)
+    - Better compatibility with Pydantic's model_json_schema()
+
+    Args:
+        model: The model name (e.g., "gemini-2.0-flash", "gemini-2.5-pro")
+
+    Returns:
+        True if the model supports responseJsonSchema, False otherwise
+    """
+    model_lower: Final = model.lower()
+
+    # Gemini 2.0+ and 2.5+ models support responseJsonSchema
+    # Pattern matches: gemini-2.0-*, gemini-2.5-*, gemini-3-*, etc.
+    gemini_2_plus_pattern: Final = re.compile(r"gemini-(?:[2-9]|[1-9]\d+)(?:\.|\-)")
+
+    return bool(gemini_2_plus_pattern.search(model_lower))
+
+
+from typing import Literal
+
+all_gemini_url_modes = Literal["chat", "embedding", "batch_embedding", "image_generation", "count_tokens"]
 
 
 def get_vertex_base_model_name(model: str) -> str:
     """
     Strip routing prefixes from model name for PSC/endpoint URL construction.
-    
-    Patterns like "bge/", "gemma/", "openai/" are used for internal routing but 
+
+    Patterns like "bge/", "gemma/", "openai/" are used for internal routing but
     should not appear in the actual endpoint URL. Routing prefixes are derived
     from VertexAIModelRoute enum values.
-    
+
     Args:
         model: The model name with potential prefix (e.g., "bge/123456", "gemma/gemma-3-12b-it")
-        
+
     Returns:
         str: The model name without routing prefix (e.g., "123456", "gemma-3-12b-it")
-        
+
     Examples:
         >>> get_vertex_base_model_name("bge/378943383978115072")
         "378943383978115072"
-        
+
         >>> get_vertex_base_model_name("gemma/gemma-3-12b-it")
         "gemma-3-12b-it"
-        
-        >>> get_vertex_base_model_name("openai/gpt-oss-120b")
-        "gpt-oss-120b"
-        
+
+        >>> get_vertex_base_model_name("xai/grok-4.1-fast-non-reasoning")
+        "grok-4.1-fast-non-reasoning"
+
         >>> get_vertex_base_model_name("1234567890")
         "1234567890"
     """
@@ -184,73 +306,122 @@ def get_vertex_base_model_name(model: str) -> str:
     for route in VERTEX_AI_MODEL_ROUTES:
         if model.startswith(route):
             return model.replace(route, "", 1)
-    
+
     return model
+
+
+def validate_vertex_location(vertex_location: str | None) -> str:
+    """
+    Validate a Vertex AI location before interpolating it into a request host or
+    URL path.
+
+    ``vertex_location`` is client-controllable on the proxy (it flows in from the
+    request body), so it must never be trusted verbatim in a URL or an attacker
+    could point the host at their own server and exfiltrate the admin's Google
+    access token. Allow the special ``global`` control plane and otherwise require
+    a lowercase alphanumeric-plus-hyphen token (e.g. ``us``, ``us-central1``,
+    ``eu``), which rejects host injection like ``attacker.example/`` or
+    ``evil.com#``.
+    """
+    if vertex_location == "global":
+        return vertex_location
+    if vertex_location is None:
+        raise ValueError("vertex_location is required")
+    if not re.match(r"^[a-z][a-z0-9-]*$", vertex_location):
+        raise ValueError("Invalid vertex_location format")
+    return vertex_location
+
+
+def get_vertex_base_url(
+    vertex_location: str | None,
+) -> str:
+    """
+    Get the base URL for Vertex AI API calls.
+
+    - ``global`` uses the global control plane host.
+    - Multi-region geographies (e.g. ``us``, ``eu``) use ``aiplatform.{geo}.rep.googleapis.com``.
+    - Regional locations (e.g. ``us-central1``) use ``{region}-aiplatform.googleapis.com``.
+    """
+    validated_location: Final = validate_vertex_location(vertex_location)
+    if validated_location == "global":
+        return "https://aiplatform.googleapis.com"
+    if "-" not in validated_location:
+        return f"https://aiplatform.{validated_location}.rep.googleapis.com"
+    return f"https://{validated_location}-aiplatform.googleapis.com"
 
 
 def _get_embedding_url(
     model: str,
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
+    vertex_project: str | None,
+    vertex_location: str | None,
     vertex_api_version: Literal["v1", "v1beta1"],
-) -> Tuple[str, str]:
+) -> tuple[str, str]:
     """
     Get URL for embedding models.
-    
+
     Handles special patterns:
     - bge/endpoint_id -> strips to endpoint_id for endpoints/ routing
     - numeric model -> routes to endpoints/
     - regular model -> routes to publishers/google/models/
+    - models with uses_embed_content flag -> use embedContent endpoint instead of predict
     """
-    endpoint = "predict"
-    
-    # Strip routing prefixes (bge/, gemma/, etc.) for endpoint URL construction
+    original_model: Final = model
     model = get_vertex_base_model_name(model=model)
-    
-    url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+    try:
+        model_info: Final = litellm.get_model_info(
+            model=original_model,
+            custom_llm_provider="vertex_ai",
+        )
+        uses_embed_content = model_info.get("uses_embed_content", False)
+    except Exception:
+        uses_embed_content = False
+
+    endpoint: Final = "embedContent" if uses_embed_content else "predict"
+
+    base_url: Final = get_vertex_base_url(vertex_location)
+
     if model.isdigit():
-        # https://us-central1-aiplatform.googleapis.com/v1/projects/$PROJECT_ID/locations/us-central1/endpoints/$ENDPOINT_ID:predict
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-    
+        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+    else:
+        url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
     return url, endpoint
 
 
 def _get_vertex_url(
     mode: all_gemini_url_modes,
     model: str,
-    stream: Optional[bool],
-    vertex_project: Optional[str],
-    vertex_location: Optional[str],
+    stream: bool | None,
+    vertex_project: str | None,
+    vertex_location: str | None,
     vertex_api_version: Literal["v1", "v1beta1"],
-) -> Tuple[str, str]:
-    url: Optional[str] = None
-    endpoint: Optional[str] = None
+) -> tuple[str, str]:
+    url: str | None = None
+    endpoint: str | None = None
 
     model = litellm.VertexGeminiConfig.get_model_for_vertex_ai_url(model=model)
-    
+
     if mode == "chat":
         ### SET RUNTIME ENDPOINT ###
         endpoint = "generateContent"
+        base_url = get_vertex_base_url(vertex_location)
+
         if stream is True:
             endpoint = "streamGenerateContent"
-            if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}?alt=sse"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}?alt=sse"
-        else:
-            if vertex_location == "global":
-                url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
-            else:
-                url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
 
         # if model is only numeric chars then it's a fine tuned gemini model
         # model = 4965075652664360960
-        # send to this url: url = f"https://{vertex_location}-aiplatform.googleapis.com/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        # send to this url: url = f"{base_url}/{version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
         if model.isdigit():
-            # It's a fine-tuned Gemini model
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
-            if stream is True:
-                url += "?alt=sse"
+            # It's a fine-tuned Gemini model - use endpoints/ path
+            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        else:
+            # Regular model - use publishers/google/models/ path
+            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+
+        if stream is True:
+            url += "?alt=sse"
     elif mode == "embedding":
         return _get_embedding_url(
             model=model,
@@ -260,15 +431,17 @@ def _get_vertex_url(
         )
     elif mode == "image_generation":
         endpoint = "predict"
-        url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        base_url = get_vertex_base_url(vertex_location)
         if model.isdigit():
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+            # Numeric model -> custom endpoint
+            url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}:{endpoint}"
+        else:
+            # Regular model -> publisher model
+            url = f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
     elif mode == "count_tokens":
         endpoint = "countTokens"
-        if vertex_location == "global":
-            url = f"https://aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/global/publishers/google/models/{model}:{endpoint}"
-        else:
-            url = f"https://{vertex_location}-aiplatform.googleapis.com/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
+        base_url = get_vertex_base_url(vertex_location)
+        url = f"{base_url}/{vertex_api_version}/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model}:{endpoint}"
     if not url or not endpoint:
         raise ValueError(f"Unable to get vertex url/endpoint for mode: {mode}")
     return url, endpoint
@@ -277,44 +450,37 @@ def _get_vertex_url(
 def _get_gemini_url(
     mode: all_gemini_url_modes,
     model: str,
-    stream: Optional[bool],
-    gemini_api_key: Optional[str],
-) -> Tuple[str, str]:
+    stream: bool | None,
+) -> tuple[str, str]:
+    """Build the Gemini API URL for the given mode.
+
+    The API key is NOT included in the URL. Callers must pass it via the
+    ``x-goog-api-key`` header instead to avoid leaking credentials in
+    error tracebacks.
+    """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
-    
-    _gemini_model_name = "models/{}".format(model)
-    api_version = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
-    
+
+    _gemini_model_name: Final = f"models/{model}"
+    api_version: Final = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
+
     if mode == "chat":
         endpoint = "generateContent"
         if stream is True:
             endpoint = "streamGenerateContent"
-            url = "https://generativelanguage.googleapis.com/{}/{}:{}?key={}&alt=sse".format(
-                api_version, _gemini_model_name, endpoint, gemini_api_key
-            )
+            url = f"https://generativelanguage.googleapis.com/{api_version}/{_gemini_model_name}:{endpoint}?alt=sse"
         else:
-            url = (
-                "https://generativelanguage.googleapis.com/{}/{}:{}?key={}".format(
-                    api_version, _gemini_model_name, endpoint, gemini_api_key
-                )
-            )
+            url = f"https://generativelanguage.googleapis.com/{api_version}/{_gemini_model_name}:{endpoint}"
     elif mode == "embedding":
         endpoint = "embedContent"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/{_gemini_model_name}:{endpoint}"
     elif mode == "batch_embedding":
         endpoint = "batchEmbedContents"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/{_gemini_model_name}:{endpoint}"
     elif mode == "count_tokens":
         endpoint = "countTokens"
-        url = "https://generativelanguage.googleapis.com/v1beta/{}:{}?key={}".format(
-            _gemini_model_name, endpoint, gemini_api_key
-        )
+        url = f"https://generativelanguage.googleapis.com/v1beta/{_gemini_model_name}:{endpoint}"
     elif mode == "image_generation":
         raise ValueError(
             "LiteLLM's `gemini/` route does not support image generation yet. Let us know if you need this feature by opening an issue at https://github.com/BerriAI/litellm/issues"
@@ -325,7 +491,7 @@ def _get_gemini_url(
     return url, endpoint
 
 
-def _check_text_in_content(parts: List[PartType]) -> bool:
+def _check_text_in_content(parts: list[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -343,20 +509,18 @@ def _check_text_in_content(parts: List[PartType]) -> bool:
 def _fix_enum_empty_strings(schema, depth=0):
     """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise ValueError(
-            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema."
-        )
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
 
     if "enum" in schema and isinstance(schema["enum"], list):
         schema["enum"] = [None if value == "" else value for value in schema["enum"]]
 
     # Reuse existing recursion pattern from convert_anyof_null_to_nullable
-    properties = schema.get("properties", None)
+    properties: Final = schema.get("properties", None)
     if properties is not None:
         for _, value in properties.items():
             _fix_enum_empty_strings(value, depth=depth + 1)
 
-    items = schema.get("items", None)
+    items: Final = schema.get("items", None)
     if items is not None:
         _fix_enum_empty_strings(items, depth=depth + 1)
 
@@ -369,16 +533,14 @@ def _fix_enum_types(schema, depth=0):
     include a string type), remove the enum to avoid provider validation errors.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise ValueError(
-            f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema."
-        )
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
 
     if not isinstance(schema, dict):
         return
 
     # If enum exists but type is not string (and anyOf doesn't include string), drop enum
     if "enum" in schema and isinstance(schema["enum"], list):
-        schema_type = schema.get("type")
+        schema_type: Final = schema.get("type")
         keep_enum = False
         if isinstance(schema_type, str) and schema_type.lower() == "string":
             keep_enum = True
@@ -396,12 +558,12 @@ def _fix_enum_types(schema, depth=0):
             schema.pop("enum", None)
 
     # Recurse into nested structures
-    properties = schema.get("properties", None)
+    properties: Final = schema.get("properties", None)
     if properties is not None:
         for _, value in properties.items():
             _fix_enum_types(value, depth=depth + 1)
 
-    items = schema.get("items", None)
+    items: Final = schema.get("items", None)
     if items is not None:
         _fix_enum_types(items, depth=depth + 1)
 
@@ -426,12 +588,13 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
         parameters: dict - the input parameters, modified in place
     """
     # Get valid fields from Schema TypedDict
-    valid_schema_fields = set(get_type_hints(Schema).keys())
+    valid_schema_fields: Final = set(get_type_hints(Schema).keys())
 
-    defs = parameters.pop("$defs", {})
-    # flatten the defs
-    for name, value in defs.items():
-        unpack_defs(value, defs)
+    defs: Final = parameters.pop("$defs", {})
+    # Expand $ref references in parameters using the definitions
+    # Note: We don't pre-flatten defs as that causes exponential memory growth
+    # with circular references (see issue #19098). unpack_defs handles nested
+    # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
     # 5. Nullable fields:
@@ -462,7 +625,33 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
-def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
+def _build_json_schema(parameters: dict) -> dict:
+    """
+    Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
+
+    Unlike _build_vertex_schema (used for responseSchema), this function:
+    - Does NOT convert types to uppercase (keeps standard JSON Schema format)
+    - Does NOT add propertyOrdering
+    - Does NOT filter fields (allows additionalProperties)
+    - Preserves $defs/$ref (Gemini 2.0+ supports JSON Schema references natively)
+
+    Parameters:
+        parameters: dict - the JSON schema to process
+
+    Returns:
+        dict - the processed schema in standard JSON Schema format
+    """
+    # Gemini 2.0+ with responseJsonSchema accepts standard JSON Schema as-is,
+    # including $ref, $defs, anyOf, etc. No transformations needed — the
+    # OpenAPI-specific fixes (unpack_defs, add_object_type, convert_anyof, etc.)
+    # are only required for responseSchema (Gemini 1.5) and can break valid
+    # JSON Schema by adding conflicting fields to $ref nodes.
+    # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
+
+    return parameters
+
+
+def _filter_anyof_fields(schema_dict: dict[str, Any]) -> dict[str, Any]:
     """
     When anyof is present, only keep the anyof field and its contents - otherwise VertexAI will throw an error - https://github.com/BerriAI/litellm/issues/11164
     Filter out other fields in the same dict.
@@ -472,16 +661,12 @@ def _filter_anyof_fields(schema_dict: Dict[str, Any]) -> Dict[str, Any]:
     Case 2: If additional metadata is present, try to keep it
     E.g. {"anyOf": [{"type": "string"}, {"type": "null"}], "default": "test", "title": "test"} -> {"anyOf": [{"type": "string", "title": "test"}, {"type": "null", "title": "test"}]}
     """
-    title = schema_dict.get("title", None)
-    description = schema_dict.get("description", None)
+    title: Final = schema_dict.get("title", None)
+    description: Final = schema_dict.get("description", None)
 
     if isinstance(schema_dict, dict) and schema_dict.get("anyOf"):
-        any_of = schema_dict["anyOf"]
-        if (
-            (title or description)
-            and isinstance(any_of, list)
-            and all(isinstance(item, dict) for item in any_of)
-        ):
+        any_of: Final = schema_dict["anyOf"]
+        if (title or description) and isinstance(any_of, list) and all(isinstance(item, dict) for item in any_of):
             for item in any_of:
                 if title:
                     item["title"] = title
@@ -497,7 +682,18 @@ def process_items(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     if isinstance(schema, dict):
-        if "items" in schema and schema["items"] == {}:
+        # Vertex requires `items` whenever `type == "array"` (even inside anyOf).
+        # Normalize: empty `items: {}` and missing-items both become {"type": "object"}.
+        type_val: Final = schema.get("type")
+        if (
+            (
+                isinstance(type_val, str)
+                and type_val.lower() == "array"
+                and ("items" not in schema or schema.get("items") == {})
+            )
+            or schema.get("type") == "array"
+            and "items" not in schema
+        ):
             schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):
@@ -508,9 +704,7 @@ def process_items(schema, depth=0):
                         process_items(item, depth + 1)
 
 
-def set_schema_property_ordering(
-    schema: Dict[str, Any], depth: int = 0
-) -> Dict[str, Any]:
+def set_schema_property_ordering(schema: dict[str, Any], depth: int = 0) -> dict[str, Any]:
     """
     vertex ai and generativeai apis order output of fields alphabetically, unless you specify the order.
     python dicts retain order, so we just use that. Note that this field only applies to structured outputs, and not tools.
@@ -537,9 +731,7 @@ def set_schema_property_ordering(
     return schema
 
 
-def filter_schema_fields(
-    schema_dict: Dict[str, Any], valid_fields: Set[str], processed=None
-) -> Dict[str, Any]:
+def filter_schema_fields(schema_dict: dict[str, Any], valid_fields: set[str], processed=None) -> dict[str, Any]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """
@@ -547,7 +739,7 @@ def filter_schema_fields(
         processed = set()
 
     # Handle circular references
-    schema_id = id(schema_dict)
+    schema_id: Final = id(schema_dict)
     if schema_id in processed:
         return schema_dict
     processed.add(schema_id)
@@ -555,17 +747,14 @@ def filter_schema_fields(
     if not isinstance(schema_dict, dict):
         return schema_dict
 
-    result = {}
+    result: Final = {}
     schema_dict = _filter_anyof_fields(schema_dict)
     for key, value in schema_dict.items():
         if key not in valid_fields:
             continue
 
         if key == "properties" and isinstance(value, dict):
-            result[key] = {
-                k: filter_schema_fields(v, valid_fields, processed)
-                for k, v in value.items()
-            }
+            result[key] = {k: filter_schema_fields(v, valid_fields, processed) for k, v in value.items()}
         elif key == "format":
             if value in {"enum", "date-time"}:
                 result[key] = value
@@ -574,9 +763,7 @@ def filter_schema_fields(
         elif key == "items" and isinstance(value, dict):
             result[key] = filter_schema_fields(value, valid_fields, processed)
         elif key == "anyOf" and isinstance(value, list):
-            result[key] = [
-                filter_schema_fields(item, valid_fields, processed) for item in value  # type: ignore
-            ]
+            result[key] = [filter_schema_fields(item, valid_fields, processed) for item in value]
         else:
             result[key] = value
 
@@ -589,11 +776,11 @@ def convert_anyof_null_to_nullable(schema, depth=0):
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
         )
     """ Converts null objects within anyOf by removing them and adding nullable to all remaining objects """
-    anyof = schema.get("anyOf", None)
+    anyof: Final = schema.get("anyOf", None)
     if anyof is not None:
         contains_null = False
         for atype in anyof:
-            if atype == {"type": "null"}:
+            if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
@@ -604,55 +791,69 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         if len(anyof) == 0:
             # Edge case: response schema with only null type present is invalid in Vertex AI
             raise ValueError(
-                "Invalid input: AnyOf schema with only null type is not supported. "
-                "Please provide a non-null type."
+                "Invalid input: AnyOf schema with only null type is not supported. Please provide a non-null type."
             )
 
         if contains_null:
             # set all types to nullable following guidance found here: https://cloud.google.com/vertex-ai/generative-ai/docs/samples/generativeaionvertexai-gemini-controlled-generation-response-schema-3#generativeaionvertexai_gemini_controlled_generation_response_schema_3-python
+            # Empty `items: {}` on array branches is left in place; downstream
+            # process_items() converts it to {"type": "object"}, which Vertex
+            # requires whenever type == "array" (even inside anyOf).
             for atype in anyof:
-                # Remove items field if type is array and items is empty
-                if (
-                    atype.get("type") == "array"
-                    and "items" in atype
-                    and not atype["items"]
-                ):
-                    atype.pop("items")
                 atype["nullable"] = True
 
-    properties = schema.get("properties", None)
+    properties: Final = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
             convert_anyof_null_to_nullable(value, depth=depth + 1)
 
-    items = schema.get("items", None)
+    items: Final = schema.get("items", None)
     if items is not None:
         convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
 def add_object_type(schema):
-    properties = schema.get("properties", None)
+    # Gemini requires all function parameters to be type OBJECT
+    # Handle case where schema has no properties and no type (e.g. tools with no arguments)
+    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
+        schema["type"] = "object"
+
+    properties: Final = schema.get("properties", None)
     if properties is not None:
         if "required" in schema and schema["required"] is None:
             schema.pop("required", None)
-        schema["type"] = "object"
-        for name, value in properties.items():
-            add_object_type(value)
+        # Gemini doesn't accept empty properties for object types
+        # If properties is empty, remove it but keep type as object
+        if not properties:
+            schema.pop("properties", None)
+            schema.pop("required", None)
+            schema["type"] = "object"
+        else:
+            schema["type"] = "object"
+            for name, value in properties.items():
+                add_object_type(value)
 
-    items = schema.get("items", None)
+    items: Final = schema.get("items", None)
     if items is not None:
         add_object_type(items)
+
+    for key in ["anyOf", "oneOf", "allOf"]:
+        values = schema.get(key, None)
+        if values is not None and isinstance(values, list):
+            for value in values:
+                if isinstance(value, dict):
+                    add_object_type(value)
 
 
 def strip_field(schema, field_name: str):
     schema.pop(field_name, None)
 
-    properties = schema.get("properties", None)
+    properties: Final = schema.get("properties", None)
     if properties is not None:
         for name, value in properties.items():
             strip_field(value, field_name)
 
-    items = schema.get("items", None)
+    items: Final = schema.get("items", None)
     if items is not None:
         strip_field(items, field_name)
 
@@ -667,7 +868,7 @@ def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     from datetime import datetime
 
     # Parse the ISO format string to datetime object
-    dt = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
+    dt: Final = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
     # Convert to Unix timestamp (seconds since epoch)
     return int(dt.timestamp())
 
@@ -689,10 +890,49 @@ def _convert_schema_types(schema, depth=0):
 
     # Handle type field
     if "type" in schema:
-        type_val = schema["type"]
+        type_val: Final = schema["type"]
         if isinstance(type_val, list) and len(type_val) > 1:
-            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
-            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            # Convert type arrays to anyOf format
+            # Fields that are specific to object/array types and should move into anyOf
+            type_specific_fields: Final = {
+                "properties",
+                "required",
+                "additionalProperties",
+                "items",
+                "minItems",
+                "maxItems",
+                "minProperties",
+                "maxProperties",
+            }
+
+            any_of: Final[list[dict[str, Any]]] = []
+            for t in type_val:
+                if not isinstance(t, str):
+                    continue
+                if t == "null":
+                    # Keep null entry minimal so we can strip it later.
+                    any_of.append({"type": "null"})
+                    continue
+
+                # For object/array types, include type-specific fields
+                if t in ("object", "array"):
+                    item_schema = {"type": t}
+                    # Move type-specific fields into this anyOf item
+                    for field in type_specific_fields:
+                        if field in schema:
+                            item_schema[field] = deepcopy(schema[field])
+                    any_of.append(item_schema)
+                else:
+                    # For primitive types, only include the type
+                    any_of.append({"type": t})
+
+            # Remove type-specific fields from parent if we moved them into anyOf
+            has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
+            if has_object_or_array:
+                for field in type_specific_fields:
+                    schema.pop(field, None)
+
+            schema["anyOf"] = any_of
             schema.pop("type")
         elif isinstance(type_val, list) and len(type_val) == 1:
             schema["type"] = type_val[0]
@@ -713,34 +953,42 @@ def _convert_schema_types(schema, depth=0):
                     _convert_schema_types(anyof_schema, depth + 1)
 
 
-def get_vertex_project_id_from_url(url: str) -> Optional[str]:
+def get_vertex_project_id_from_url(url: str) -> str | None:
     """
     Get the vertex project id from the url
 
     `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
     """
-    match = re.search(r"/projects/([^/]+)", url)
+    match: Final = re.search(r"/projects/([^/]+)", url)
     return match.group(1) if match else None
 
 
-def get_vertex_location_from_url(url: str) -> Optional[str]:
+def get_vertex_location_from_url(url: str) -> str | None:
     """
     Get the vertex location from the url
 
     `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
     """
-    match = re.search(r"/locations/([^/]+)", url)
+    match: Final = re.search(r"/locations/([^/]+)", url)
     return match.group(1) if match else None
 
 
-def replace_project_and_location_in_route(
-    requested_route: str, vertex_project: str, vertex_location: str
-) -> str:
+def get_vertex_model_id_from_url(url: str) -> str | None:
+    """
+    Get the vertex model id from the url
+
+    `https://${LOCATION}-aiplatform.googleapis.com/v1/projects/${PROJECT_ID}/locations/${LOCATION}/publishers/google/models/${MODEL_ID}:streamGenerateContent`
+    """
+    match: Final = re.search(r"/models/([^:]+)", url)
+    return match.group(1) if match else None
+
+
+def replace_project_and_location_in_route(requested_route: str, vertex_project: str, vertex_location: str) -> str:
     """
     Replace project and location values in the route with the provided values
     """
     # Replace project and location values while keeping route structure
-    modified_route = re.sub(
+    modified_route: Final = re.sub(
         r"/projects/[^/]+/locations/[^/]+/",
         f"/projects/{vertex_project}/locations/{vertex_location}/",
         requested_route,
@@ -751,8 +999,8 @@ def replace_project_and_location_in_route(
 def construct_target_url(
     base_url: str,
     requested_route: str,
-    vertex_location: Optional[str],
-    vertex_project: Optional[str],
+    vertex_location: str | None,
+    vertex_project: str | None,
 ) -> httpx.URL:
     """
     Allow user to specify their own project id / location.
@@ -765,12 +1013,10 @@ def construct_target_url(
     POST https://LOCATION-aiplatform.googleapis.com/{version}/projects/PROJECT_ID/locations/LOCATION/cachedContents
     """
 
-    new_base_url = httpx.URL(base_url)
+    new_base_url: Final = httpx.URL(base_url)
     if "locations" in requested_route:  # contains the target project id + location
         if vertex_project and vertex_location:
-            requested_route = replace_project_and_location_in_route(
-                requested_route, vertex_project, vertex_location
-            )
+            requested_route = replace_project_and_location_in_route(requested_route, vertex_project, vertex_location)
         return new_base_url.copy_with(path=requested_route)
 
     """
@@ -782,38 +1028,25 @@ def construct_target_url(
     if "cachedContent" in requested_route:
         vertex_version = "v1beta1"
 
-    base_requested_route = "{}/projects/{}/locations/{}".format(
-        vertex_version, vertex_project, vertex_location
-    )
+    # Check if the requested route starts with a version
+    # e.g. /v1beta1/publishers/google/models/gemini-3-pro-preview:streamGenerateContent
+    if requested_route.startswith("/v1/"):
+        vertex_version = "v1"
+        requested_route = requested_route.replace("/v1/", "/", 1)
+    elif requested_route.startswith("/v1beta1/"):
+        vertex_version = "v1beta1"
+        requested_route = requested_route.replace("/v1beta1/", "/", 1)
 
-    updated_requested_route = "/" + base_requested_route + requested_route
+    base_requested_route: Final = f"{vertex_version}/projects/{vertex_project}/locations/{vertex_location}"
 
-    updated_url = new_base_url.copy_with(path=updated_requested_route)
+    updated_requested_route: Final = "/" + base_requested_route + requested_route
+
+    updated_url: Final = new_base_url.copy_with(path=updated_requested_route)
     return updated_url
 
 
-def is_global_only_vertex_model(model: str) -> bool:
-    """
-    Check if a model is only available in the global region.
-
-    Args:
-        model: The model name to check
-
-    Returns:
-        True if the model is only available in global region, False otherwise
-    """
-    from litellm.utils import get_supported_regions
-
-    supported_regions = get_supported_regions(
-        model=model, custom_llm_provider="vertex_ai"
-    )
-    if supported_regions is None:
-        return False
-    return "global" in supported_regions
-
-
 class VertexAIModelInfo(BaseLLMModelInfo):
-    def get_token_counter(self) -> Optional[BaseTokenCounter]:
+    def get_token_counter(self) -> BaseTokenCounter | None:
         """
         Factory method to create a token counter for this provider.
 
@@ -827,34 +1060,32 @@ class VertexAIModelInfo(BaseLLMModelInfo):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
-    def get_models(
-        self, api_key: Optional[str] = None, api_base: Optional[str] = None
-    ) -> List[str]:
+    def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """
         Returns a list of models supported by this provider.
         """
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     @staticmethod
-    def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    def get_api_key(api_key: str | None = None) -> str | None:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     @staticmethod
     def get_api_base(
-        api_base: Optional[str] = None,
-    ) -> Optional[str]:
+        api_base: str | None = None,
+    ) -> str | None:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
+    def get_base_model(model: str) -> str | None:
         """
         Returns the base model name from the given model name.
 
@@ -869,7 +1100,7 @@ class VertexAITokenCounter(BaseTokenCounter):
 
     def should_use_token_counting_api(
         self,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
     ) -> bool:
         from litellm.types.utils import LlmProviders
 
@@ -878,11 +1109,13 @@ class VertexAITokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
         request_model: str = "",
-    ) -> Optional[TokenCountResponse]:
+        tools: list[dict[str, Any]] | None = None,
+        system: Any | None = None,
+    ) -> TokenCountResponse | None:
         import copy
 
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
@@ -890,23 +1123,26 @@ class VertexAITokenCounter(BaseTokenCounter):
         )
 
         deployment = deployment or {}
-        count_tokens_params_request = copy.deepcopy(
-            deployment.get("litellm_params", {})
-        )
+        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
             # Use partner models token counter
-            partner_models_handler = VertexAIPartnerModels()
+            partner_models_handler: Final = VertexAIPartnerModels()
 
             # Extract vertex-specific params from litellm_params
-            vertex_project = count_tokens_params_request.get(
-                "vertex_project"
-            ) or count_tokens_params_request.get("vertex_ai_project")
-            vertex_location = count_tokens_params_request.get(
-                "vertex_location"
-            ) or count_tokens_params_request.get("vertex_ai_location")
-            vertex_credentials = count_tokens_params_request.get(
+            vertex_project = count_tokens_params_request.get("vertex_project") or count_tokens_params_request.get(
+                "vertex_ai_project"
+            )
+
+            vertex_location = count_tokens_params_request.get("vertex_location") or count_tokens_params_request.get(
+                "vertex_ai_location"
+            )
+
+            # Count tokens not available on global location: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+            vertex_location = count_tokens_params_request.get("vertex_count_tokens_location") or vertex_location
+
+            vertex_credentials: Final = count_tokens_params_request.get(
                 "vertex_credentials"
             ) or count_tokens_params_request.get("vertex_ai_credentials")
 
@@ -931,7 +1167,7 @@ class VertexAITokenCounter(BaseTokenCounter):
             # Use standard Vertex AI (Gemini) token counter
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
 
-            count_tokens_params = {
+            count_tokens_params: Final = {
                 "model": model_to_use,
                 "contents": contents,
             }

@@ -3,7 +3,7 @@ Base configuration class for Skills API
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -38,16 +38,14 @@ class BaseSkillsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(
-        self, headers: dict, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate and update headers with provider-specific requirements
-        
+
         Args:
             headers: Base headers dictionary
             litellm_params: LiteLLM parameters
-            
+
         Returns:
             Updated headers dictionary
         """
@@ -56,18 +54,18 @@ class BaseSkillsAPIConfig(ABC):
     @abstractmethod
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         endpoint: str,
-        skill_id: Optional[str] = None,
+        skill_id: str | None = None,
     ) -> str:
         """
         Get the complete URL for the API request
-        
+
         Args:
             api_base: Base API URL
             endpoint: API endpoint (e.g., 'skills', 'skills/{id}')
             skill_id: Optional skill ID for specific skill operations
-            
+
         Returns:
             Complete URL
         """
@@ -81,19 +79,18 @@ class BaseSkillsAPIConfig(ABC):
         create_request: CreateSkillRequest,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform create skill request to provider-specific format
-        
+
         Args:
             create_request: Skill creation parameters
             litellm_params: LiteLLM parameters
             headers: Request headers
-            
+
         Returns:
             Provider-specific request body
         """
-        pass
 
     @abstractmethod
     def transform_create_skill_response(
@@ -103,15 +100,14 @@ class BaseSkillsAPIConfig(ABC):
     ) -> Skill:
         """
         Transform provider response to Skill object
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             Skill object
         """
-        pass
 
     @abstractmethod
     def transform_list_skills_request(
@@ -119,19 +115,18 @@ class BaseSkillsAPIConfig(ABC):
         list_params: ListSkillsParams,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform list skills request parameters
-        
+
         Args:
             list_params: List parameters (pagination, filters)
             litellm_params: LiteLLM parameters
             headers: Request headers
-            
+
         Returns:
             Tuple of (url, query_params)
         """
-        pass
 
     @abstractmethod
     def transform_list_skills_response(
@@ -141,15 +136,14 @@ class BaseSkillsAPIConfig(ABC):
     ) -> ListSkillsResponse:
         """
         Transform provider response to ListSkillsResponse
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             ListSkillsResponse object
         """
-        pass
 
     @abstractmethod
     def transform_get_skill_request(
@@ -158,20 +152,19 @@ class BaseSkillsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform get skill request
-        
+
         Args:
             skill_id: Skill ID
             api_base: Base API URL
             litellm_params: LiteLLM parameters
             headers: Request headers
-            
+
         Returns:
             Tuple of (url, headers)
         """
-        pass
 
     @abstractmethod
     def transform_get_skill_response(
@@ -181,15 +174,14 @@ class BaseSkillsAPIConfig(ABC):
     ) -> Skill:
         """
         Transform provider response to Skill object
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             Skill object
         """
-        pass
 
     @abstractmethod
     def transform_delete_skill_request(
@@ -198,20 +190,19 @@ class BaseSkillsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> Tuple[str, Dict]:
+    ) -> tuple[str, dict]:
         """
         Transform delete skill request
-        
+
         Args:
             skill_id: Skill ID
             api_base: Base API URL
             litellm_params: LiteLLM parameters
             headers: Request headers
-            
+
         Returns:
             Tuple of (url, headers)
         """
-        pass
 
     @abstractmethod
     def transform_delete_skill_response(
@@ -221,15 +212,14 @@ class BaseSkillsAPIConfig(ABC):
     ) -> DeleteSkillResponse:
         """
         Transform provider response to DeleteSkillResponse
-        
+
         Args:
             raw_response: Raw HTTP response
             logging_obj: Logging object
-            
+
         Returns:
             DeleteSkillResponse object
         """
-        pass
 
     def get_error_class(
         self,
@@ -243,4 +233,3 @@ class BaseSkillsAPIConfig(ABC):
             message=error_message,
             headers=headers,
         )
-

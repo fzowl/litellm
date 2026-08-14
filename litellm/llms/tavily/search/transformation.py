@@ -3,7 +3,8 @@ Calls Tavily's /search endpoint to search the web.
 
 Tavily API Reference: https://docs.tavily.com/documentation/api-reference/endpoint/search
 """
-from typing import Dict, List, Optional, TypedDict, Union
+
+from typing import Final, TypedDict
 
 import httpx
 
@@ -18,6 +19,7 @@ from litellm.secret_managers.main import get_secret_str
 
 class _TavilySearchRequestRequired(TypedDict):
     """Required fields for Tavily Search API request."""
+
     query: str  # Required - search query
 
 
@@ -26,13 +28,14 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
     Tavily Search API request format.
     Based on: https://docs.tavily.com/documentation/api-reference/endpoint/search
     """
+
     max_results: int  # Optional - maximum number of results (0-20), default 5
-    include_domains: List[str]  # Optional - list of domains to include (max 300)
-    exclude_domains: List[str]  # Optional - list of domains to exclude (max 150)
+    include_domains: list[str]  # Optional - list of domains to include (max 300)
+    exclude_domains: list[str]  # Optional - list of domains to exclude (max 150)
     topic: str  # Optional - category of search ('general', 'news', 'finance'), default 'general'
     search_depth: str  # Optional - depth of search ('basic', 'advanced'), default 'basic'
-    include_answer: Union[bool, str]  # Optional - include LLM-generated answer
-    include_raw_content: Union[bool, str]  # Optional - include raw HTML content
+    include_answer: bool | str  # Optional - include LLM-generated answer
+    include_raw_content: bool | str  # Optional - include raw HTML content
     include_images: bool  # Optional - perform image search
     include_image_descriptions: bool  # Optional - add descriptions for images
     include_favicon: bool  # Optional - include favicon URL
@@ -44,22 +47,28 @@ class TavilySearchRequest(_TavilySearchRequestRequired, total=False):
 
 class TavilySearchConfig(BaseSearchConfig):
     TAVILY_API_BASE = "https://api.tavily.com"
-    
+
     @staticmethod
     def ui_friendly_name() -> str:
         return "Tavily"
-    
+
     def validate_environment(
         self,
-        headers: Dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        headers: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Validate environment and return headers.
         """
-        api_key = api_key or get_secret_str("TAVILY_API_KEY")
+        api_key = self.resolve_server_api_key(
+            caller_api_key=api_key,
+            caller_api_base=api_base,
+            key_env_vars=("TAVILY_API_KEY",),
+            base_env_var="TAVILY_API_BASE",
+            default_api_base=self.TAVILY_API_BASE,
+        )
         if not api_key:
             raise ValueError("TAVILY_API_KEY is not set. Set `TAVILY_API_KEY` environment variable.")
         headers["Authorization"] = f"Bearer {api_key}"
@@ -68,32 +77,31 @@ class TavilySearchConfig(BaseSearchConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
+        api_base: str | None,
         optional_params: dict,
-        data: Optional[Union[Dict, List[Dict]]] = None,
+        data: dict | list[dict] | None = None,
         **kwargs,
     ) -> str:
         """
         Get complete URL for Search endpoint.
         """
         api_base = api_base or get_secret_str("TAVILY_API_BASE") or self.TAVILY_API_BASE
-        
+
         # Append "/search" to the api base if it's not already there
         if not api_base.endswith("/search"):
             api_base = f"{api_base}/search"
 
         return api_base
-        
 
     def transform_search_request(
         self,
-        query: Union[str, List[str]],
+        query: str | list[str],
         optional_params: dict,
         **kwargs,
-    ) -> Dict:
+    ) -> dict:
         """
         Transform Search request to Tavily API format.
-        
+
         Args:
             query: Search query (string or list of strings). Tavily only supports single string queries.
             optional_params: Optional parameters for the request
@@ -111,7 +119,7 @@ class TavilySearchConfig(BaseSearchConfig):
                 - start_date: Start date filter (YYYY-MM-DD)
                 - end_date: End date filter (YYYY-MM-DD)
                 - country: Country code filter (e.g., 'US', 'GB', 'DE')
-            
+
         Returns:
             Dict with typed request data following TavilySearchRequest spec
         """
@@ -119,29 +127,29 @@ class TavilySearchConfig(BaseSearchConfig):
             # Tavily only supports single string queries
             query = " ".join(query)
 
-        request_data: TavilySearchRequest = {
+        request_data: Final[TavilySearchRequest] = {
             "query": query,
         }
-        
+
         # Transform Perplexity unified spec parameters to Tavily format
         if "max_results" in optional_params:
             request_data["max_results"] = optional_params["max_results"]
-        
+
         if "search_domain_filter" in optional_params:
             request_data["include_domains"] = optional_params["search_domain_filter"]
-        
+
         if "country" in optional_params:
             # Tavily expects lowercase country names
             request_data["country"] = optional_params["country"].lower()
-        
+
         # Convert to dict before dynamic key assignments
-        result_data = dict(request_data)
-        
+        result_data: Final = dict(request_data)
+
         # pass through all other parameters as-is
         for param, value in optional_params.items():
             if param not in self.get_supported_perplexity_optional_params() and param not in result_data:
                 result_data[param] = value
-        
+
         return result_data
 
     def transform_search_response(
@@ -152,24 +160,24 @@ class TavilySearchConfig(BaseSearchConfig):
     ) -> SearchResponse:
         """
         Transform Tavily API response to LiteLLM unified SearchResponse format.
-        
+
         Tavily → LiteLLM mappings:
         - results[].title → SearchResult.title
         - results[].url → SearchResult.url
         - results[].content → SearchResult.snippet
         - No date/last_updated fields in Tavily response (set to None)
-        
+
         Args:
             raw_response: Raw httpx response from Tavily API
             logging_obj: Logging object for tracking
-            
+
         Returns:
             SearchResponse with standardized format
         """
-        response_json = raw_response.json()
-        
+        response_json: Final = raw_response.json()
+
         # Transform results to SearchResult objects
-        results = []
+        results: Final = []
         for result in response_json.get("results", []):
             search_result = SearchResult(
                 title=result.get("title", ""),
@@ -179,9 +187,8 @@ class TavilySearchConfig(BaseSearchConfig):
                 last_updated=None,  # Tavily doesn't provide last_updated in response
             )
             results.append(search_result)
-        
+
         return SearchResponse(
             results=results,
             object="search",
         )
-

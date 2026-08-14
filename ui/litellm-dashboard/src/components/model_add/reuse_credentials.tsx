@@ -2,7 +2,7 @@ import React from "react";
 import { Form, Button, Tooltip, Typography, Modal } from "antd";
 import { TextInput } from "@tremor/react";
 import { CredentialItem } from "../networking";
-const { Title, Link } = Typography;
+const { Link } = Typography;
 
 interface ReuseCredentialsModalProps {
   isVisible: boolean;
@@ -21,8 +21,6 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
 }) => {
   const [form] = Form.useForm();
 
-  console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
-
   const handleSubmit = (values: any) => {
     onAddCredential(values);
     form.resetFields();
@@ -32,7 +30,7 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   return (
     <Modal
       title="Reuse Credentials"
-      visible={isVisible}
+      open={isVisible}
       onCancel={() => {
         onCancel();
         form.resetFields();
