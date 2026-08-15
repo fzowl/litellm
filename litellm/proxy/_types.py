@@ -38,6 +38,7 @@ from litellm.types.mcp import (
     MCPTransportType,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.secret_managers.main import KeyManagementSystem
 from litellm.types.utils import (
@@ -1283,6 +1284,9 @@ class MCPApprovalStatus(str, enum.Enum):
     pending_review = "pending_review"
     active = "active"
     rejected = "rejected"
+    # Short-lived row backing the admin OAuth "Authorize & Fetch Token" flow. Never served: the
+    # registry loader and every listing exclude it, so it is reachable only by its own server_id.
+    draft = "draft"
 
 
 from litellm.models.mcp_server import (  # noqa: E402
@@ -2329,6 +2333,15 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    control_plane_url: str | None = Field(
+        None,
+        description=(
+            "Global Control Plane: URL of the control plane whose admin UI manages this instance. "
+            "Enables /v3/login and /v3/login/exchange on this instance so that UI can authenticate "
+            "against it cross-origin, and restricts the SSO return_to origin to that URL. "
+            "No state is shared with the control plane"
+        ),
+    )
     allow_cli_sso_verification_uri_complete: bool | None = Field(
         None,
         description="opt-in to RFC 8628 verification_uri_complete for the CLI SSO device flow, pre-filling the user_code in the browser. Off by default; intended for same-host clients where the device that starts the flow and the browser run on the same machine",
@@ -2511,6 +2524,22 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.",
     )
+    maximum_spend_logs_cleanup_batch_size: int | None = Field(
+        None,
+        description="Rows deleted per DELETE statement by the spend log cleanup job. Defaults to 1000.",
+    )
+    maximum_spend_logs_cleanup_max_batches: int | None = Field(
+        None,
+        description="Maximum DELETE statements the spend log cleanup job issues per table per run. Defaults to 500.",
+    )
+    maximum_spend_logs_cleanup_run_budget: str | None = Field(
+        None,
+        description="Wall-clock budget for one spend log cleanup run (e.g. '5m'), shared across every table it prunes. A run that hits the budget stops and the next run resumes from where it left off. Defaults to '5m'.",
+    )
+    maximum_spend_logs_cleanup_batch_timeout: str | None = Field(
+        None,
+        description="Postgres statement_timeout and lock_timeout applied to each spend log cleanup delete batch (e.g. '30s'), so cleanup cannot hold row locks or a connection indefinitely. Defaults to '30s'.",
+    )
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
@@ -2610,6 +2639,14 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
         description="litellm Module settings. See __init__.py for all, example litellm.drop_params=True, litellm.set_verbose=True, litellm.api_base, litellm.cache",
     )
     general_settings: ConfigGeneralSettings | None = None
+    worker_registry: list[WorkerRegistryEntry] | None = Field(
+        None,
+        description=(
+            "Global Control Plane: the independent proxy instances this instance's admin UI manages. "
+            "Setting it makes this a control plane, which serves the UI and does not route LLM requests. "
+            "Enterprise-only"
+        ),
+    )
     router_settings: UpdateRouterConfig | None = Field(
         None,
         description="litellm router object settings. See router.py __init__ for all, example router.num_retries=5, router.timeout=5, router.max_retries=5, router.retry_after=5",
