@@ -195,6 +195,51 @@ class TestVoyageContextualEmbeddings:
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
 
+    def test_contextual_embedding_flat_list_input(self):
+        """A flat list[str] is passed through unchanged as inputs (spec allows list[str])"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        flat_input = ["chunk one", "chunk two"]
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", flat_input, {}, {}
+        )
+
+        assert transformed["inputs"] == flat_input
+        assert transformed["model"] == "voyage-context-4"
+
+    def test_contextual_embedding_nested_list_input(self):
+        """A nested list[list[str]] is passed through unchanged as inputs"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        nested_input = [["doc a chunk 1", "doc a chunk 2"], ["doc b chunk 1"]]
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", nested_input, {}, {}
+        )
+
+        assert transformed["inputs"] == nested_input
+
+    def test_contextual_embedding_str_input_wrapped(self):
+        """A bare str is wrapped into a single-element list so inputs is always a list"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "just one chunk", {}, {}
+        )
+
+        assert transformed["inputs"] == ["just one chunk"]
+
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
@@ -428,3 +473,24 @@ class TestVoyageContextualEmbeddings:
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
+
+
+def test_voyage_current_models_registered():
+    """The models currently listed on docs.voyageai.com resolve with voyage pricing/context"""
+    from litellm import get_model_info
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    expected = {
+        "voyage/voyage-4-nano": {"max_input_tokens": 32000, "input_cost_per_token": 0.0},
+        "voyage/voyage-multilingual-2": {"max_input_tokens": 32000, "input_cost_per_token": 1.2e-07},
+        "voyage/voyage-context-4": {"max_input_tokens": 120000, "input_cost_per_token": 1.2e-07},
+    }
+
+    for model, fields in expected.items():
+        info = get_model_info(model)
+        assert info["litellm_provider"] == "voyage", f"{model} wrong provider"
+        assert info["mode"] == "embedding", f"{model} wrong mode"
+        assert info["max_input_tokens"] == fields["max_input_tokens"], f"{model} wrong context"
+        assert info["input_cost_per_token"] == fields["input_cost_per_token"], f"{model} wrong price"

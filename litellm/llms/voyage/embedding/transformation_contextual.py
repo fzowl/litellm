@@ -105,10 +105,26 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         headers: dict,
     ) -> dict:
         return {
-            "inputs": input,
+            "inputs": self._normalize_contextual_inputs(input),
             "model": model,
             **optional_params,
         }
+
+    @staticmethod
+    def _normalize_contextual_inputs(
+        input: AllEmbeddingInputValues | list[list[str]],
+    ) -> AllEmbeddingInputValues | list[list[str]]:
+        """
+        Voyage's contextualized embeddings API accepts ``inputs`` as either a
+        flat ``list[str]`` (one document's chunks) or a nested ``list[list[str]]``
+        (multiple documents). Both are sent through unchanged; a bare ``str`` is
+        wrapped into a single-element list so the payload always matches the spec.
+
+        Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
+        """
+        if isinstance(input, str):
+            return [input]
+        return input
 
     def transform_embedding_response(
         self,
