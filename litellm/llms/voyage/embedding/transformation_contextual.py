@@ -104,27 +104,41 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        inputs, contextual_params = self._prepare_contextual_inputs(input, optional_params)
         return {
-            "inputs": self._normalize_contextual_inputs(input),
+            "inputs": inputs,
             "model": model,
             **optional_params,
+            **contextual_params,
         }
 
     @staticmethod
-    def _normalize_contextual_inputs(
+    def _prepare_contextual_inputs(
         input: AllEmbeddingInputValues | list[list[str]],
-    ) -> AllEmbeddingInputValues | list[list[str]]:
+        optional_params: dict,
+    ) -> tuple[AllEmbeddingInputValues | list[list[str]], dict[str, str | bool]]:
         """
-        Voyage's contextualized embeddings API accepts ``inputs`` as either a
-        flat ``list[str]`` (one document's chunks) or a nested ``list[list[str]]``
-        (multiple documents). Both are sent through unchanged; a bare ``str`` is
-        wrapped into a single-element list so the payload always matches the spec.
+        Shape ``inputs`` and the auto-chunking params to match Voyage's
+        contextualized embeddings contract.
+
+        - ``list[list[str]]`` (pre-chunked documents) is always valid and passes through.
+        - A flat ``list[str]`` or bare ``str`` is only valid as documents when
+          ``enable_auto_chunking=True`` with ``input_type="document"``, or as
+          queries with ``input_type="query"``. So a non-query flat input is sent
+          with those two params defaulted (caller-set values win).
 
         Reference: https://docs.voyageai.com/docs/contextualized-chunk-embeddings
         """
-        if isinstance(input, str):
-            return [input]
-        return input
+        if isinstance(input, list) and len(input) > 0 and isinstance(input[0], list):
+            return input, {}
+        flat: Final = [input] if isinstance(input, str) else input
+        if optional_params.get("input_type") == "query":
+            return flat, {}
+        contextual_params: Final = {
+            **({"input_type": "document"} if "input_type" not in optional_params else {}),
+            **({"enable_auto_chunking": True} if "enable_auto_chunking" not in optional_params else {}),
+        }
+        return flat, contextual_params
 
     def transform_embedding_response(
         self,

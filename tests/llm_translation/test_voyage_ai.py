@@ -195,8 +195,8 @@ class TestVoyageContextualEmbeddings:
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
 
-    def test_contextual_embedding_flat_list_input(self):
-        """A flat list[str] is passed through unchanged as inputs (spec allows list[str])"""
+    def test_contextual_embedding_flat_list_defaults_to_document_auto_chunk(self):
+        """A flat list[str] with no input_type is documents, so it needs auto-chunking + input_type=document"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
@@ -210,9 +210,28 @@ class TestVoyageContextualEmbeddings:
 
         assert transformed["inputs"] == flat_input
         assert transformed["model"] == "voyage-context-4"
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is True
 
-    def test_contextual_embedding_nested_list_input(self):
-        """A nested list[list[str]] is passed through unchanged as inputs"""
+    def test_contextual_embedding_flat_list_query_stays_flat_without_auto_chunk(self):
+        """A flat list[str] of queries is valid as-is, so no auto-chunking must be forced on"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        flat_input = ["what is voyage", "who owns voyage"]
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", flat_input, {"input_type": "query"}, {}
+        )
+
+        assert transformed["inputs"] == flat_input
+        assert transformed["input_type"] == "query"
+        assert "enable_auto_chunking" not in transformed
+
+    def test_contextual_embedding_nested_list_input_passes_through(self):
+        """A nested list[list[str]] is pre-chunked documents, valid unchanged with no extra params"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
@@ -225,9 +244,11 @@ class TestVoyageContextualEmbeddings:
         )
 
         assert transformed["inputs"] == nested_input
+        assert "enable_auto_chunking" not in transformed
+        assert "input_type" not in transformed
 
-    def test_contextual_embedding_str_input_wrapped(self):
-        """A bare str is wrapped into a single-element list so inputs is always a list"""
+    def test_contextual_embedding_str_input_wrapped_with_auto_chunk(self):
+        """A bare str is wrapped to a one-element list and, as documents, gets auto-chunking + input_type=document"""
         from litellm.llms.voyage.embedding.transformation_contextual import (
             VoyageContextualEmbeddingConfig,
         )
@@ -239,6 +260,28 @@ class TestVoyageContextualEmbeddings:
         )
 
         assert transformed["inputs"] == ["just one chunk"]
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is True
+
+    def test_contextual_embedding_caller_params_win(self):
+        """Caller-set input_type=document with explicit auto-chunking off must be respected, not overridden"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+        flat_input = ["chunk a", "chunk b"]
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4",
+            flat_input,
+            {"input_type": "document", "enable_auto_chunking": False},
+            {},
+        )
+
+        assert transformed["inputs"] == flat_input
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is False
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""
