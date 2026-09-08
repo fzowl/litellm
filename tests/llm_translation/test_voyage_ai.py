@@ -194,6 +194,44 @@ class TestVoyageContextualEmbeddings:
         assert transformed["inputs"] == input_data
         assert transformed["model"] == "voyage-context-3"
         assert transformed["encoding_format"] == "float"
+        # Pre-chunked (nested) inputs are passed through, no backend auto-chunking
+        assert "enable_auto_chunking" not in transformed
+        assert "chunk_size" not in transformed
+
+    def test_contextual_embedding_flat_list_auto_chunking(self):
+        """Flat list[str] documents are wrapped and sent with backend auto-chunking"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["doc one", "doc two"], {}, {}
+        )
+
+        assert transformed["inputs"] == [["doc one"], ["doc two"]]
+        assert transformed["model"] == "voyage-context-4"
+        assert transformed["input_type"] == "document"
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 32000
+
+    def test_contextual_embedding_single_string_auto_chunking(self):
+        """A single str document is wrapped as [[str]] with auto-chunking enabled"""
+        from litellm.llms.voyage.embedding.transformation_contextual import (
+            VoyageContextualEmbeddingConfig,
+        )
+
+        config = VoyageContextualEmbeddingConfig()
+
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "single document", {}, {}
+        )
+
+        assert transformed["inputs"] == [["single document"]]
+        assert transformed["enable_auto_chunking"] is True
+        assert transformed["chunk_size"] == 32000
+        assert transformed["input_type"] == "document"
 
     def test_contextual_embedding_response_transformation(self):
         """Test response transformation for contextual embeddings"""

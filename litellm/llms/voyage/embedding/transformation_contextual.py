@@ -97,6 +97,8 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
             "Authorization": f"Bearer {api_key}",
         }
 
+    AUTO_CHUNK_SIZE: Final = 32000
+
     def transform_embedding_request(
         self,
         model: str,
@@ -104,11 +106,38 @@ class VoyageContextualEmbeddingConfig(BaseEmbeddingConfig):
         optional_params: dict,
         headers: dict,
     ) -> dict:
+        documents: Final = self._normalize_document_inputs(input)
+        if documents is None:
+            return {
+                "inputs": input,
+                "model": model,
+                **optional_params,
+            }
         return {
-            "inputs": input,
-            "model": model,
             **optional_params,
+            "inputs": documents,
+            "model": model,
+            "input_type": "document",
+            "enable_auto_chunking": True,
+            "chunk_size": self.AUTO_CHUNK_SIZE,
         }
+
+    @staticmethod
+    def _normalize_document_inputs(
+        input: AllEmbeddingInputValues | list[list[str]],
+    ) -> list[list[str]] | None:
+        """
+        Voyage's contextualized embeddings API expects ``inputs`` as list[list[str]].
+        A flat list[str] (or a single str) of documents is accepted only alongside
+        ``enable_auto_chunking=True`` and ``input_type="document"``, which wraps each
+        document as its own single-string entry for backend chunking. Already-nested
+        (pre-chunked) inputs and token-id inputs are passed through untouched.
+        """
+        if isinstance(input, str):
+            return [[input]]
+        if isinstance(input, list) and all(isinstance(item, str) for item in input):
+            return [[item] for item in input]
+        return None
 
     def transform_embedding_response(
         self,

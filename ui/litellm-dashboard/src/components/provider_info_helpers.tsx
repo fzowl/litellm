@@ -171,7 +171,7 @@ export enum Providers {
   VERTEX_AI_BETA = "Vertex Ai Beta",
   VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
-  Voyage = "Voyage AI",
+  Voyage = "Voyage AI by MongoDB",
   WANDB = "Wandb",
   WATSONX = "Watsonx",
   WATSONX_TEXT = "Watsonx Text",
