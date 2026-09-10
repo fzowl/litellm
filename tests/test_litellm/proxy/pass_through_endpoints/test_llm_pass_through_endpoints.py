@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import contextlib
 import json
@@ -19,6 +20,7 @@ from starlette.datastructures import FormData
 
 import litellm
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     BaseOpenAIPassThroughHandler,
@@ -1852,11 +1854,11 @@ class TestBedrockAgentRuntimePassthroughToggle:
         return request
 
     @contextlib.contextmanager
-    def _patched_dispatch(self, general_settings: Mapping[str, object]):
+    def _patched_dispatch(self, general_settings: Mapping[str, object], credentials: object | None = None):
         from botocore.credentials import Credentials
 
         bedrock_llm: Final = Mock()
-        bedrock_llm.get_credentials = Mock(return_value=Credentials("ak", "sk"))
+        bedrock_llm.get_credentials = Mock(return_value=credentials or Credentials("ak", "sk"))
         forwarder: Final = AsyncMock(return_value="forwarded")
 
         with (
@@ -1890,6 +1892,27 @@ class TestBedrockAgentRuntimePassthroughToggle:
         assert result == "forwarded"
         forwarder.assert_awaited_once()
         assert "bedrock-agent-runtime.us-east-1.amazonaws.com" in create_route.call_args.kwargs["target"]
+
+    @pytest.mark.asyncio
+    async def test_agent_runtime_dispatch_signs_off_the_event_loop(self, monkeypatch):
+        """Regression for issue #40165: the agent-runtime pass-through signed on the loop, so botocore's
+        blocking credential refresh inside SigV4 stalled every other request on the worker."""
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        probe: Final = EventLoopProbe()
+        release: Final = asyncio.create_task(probe.release_refresh_from_the_loop())
+
+        with self._patched_dispatch(MappingProxyType({}), credentials=probe.credentials()) as (create_route, forwarder):
+            result: Final = await bedrock_proxy_route(
+                endpoint=self.AGENT_RUNTIME_ENDPOINT,
+                request=self._mock_request(),
+                fastapi_response=Mock(),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        await release
+
+        assert result == "forwarded"
+        assert create_route.call_args.kwargs["custom_headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert probe.served_during_refresh is True
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value", (True, "true", "True"))
@@ -5206,3 +5229,37 @@ class TestAzureRouterModelStreamingKeepalive:
 
         assert result.headers["x-upstream"] == "kept"
         assert chunks == [b"data: hello\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_count_tokens_error_forwards_provider_headers():
+    """The count tokens route converts BedrockError into an HTTPException, and dropping the
+    headers there loses x-amzn-RequestId after the handler went to the trouble of keeping it."""
+    from fastapi import HTTPException
+
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        handle_bedrock_count_tokens,
+    )
+
+    failure = BedrockError(
+        status_code=500,
+        message="Amazon Bedrock is unable to process your request.",
+        headers={"x-amzn-RequestId": "req-count-tokens-500"},
+    )
+
+    with patch(  # test-quality-ok: the route's BedrockError branch is only reachable when the handler raises
+        "litellm.llms.bedrock.count_tokens.handler.BedrockCountTokensHandler.handle_count_tokens_request",
+        new=AsyncMock(side_effect=failure),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await handle_bedrock_count_tokens(
+                endpoint="v1/messages/count_tokens",
+                request=MagicMock(),
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+                request_body={"model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+            )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.headers["llm_provider-x-amzn-requestid"] == "req-count-tokens-500"
