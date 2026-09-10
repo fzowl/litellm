@@ -1,6 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 
@@ -39,7 +39,14 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
-from ..common_utils import FireworksAIException, FireworksAIMixin
+from ..common_utils import (
+    FireworksAIException,
+    FireworksAIMixin,
+    resolve_fireworks_resource_name,
+)
+
+if TYPE_CHECKING:
+    import tiktoken
 
 
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
@@ -265,11 +272,15 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             )
 
         # Only add tool_choice for models that explicitly support it
-        if supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(
+            model=model, capability="supports_tool_choice"
+        ) or supports_tool_choice(model=model, custom_llm_provider="fireworks_ai"):
             supported_params.append("tool_choice")
 
         # Only add reasoning params for models that support it
-        if supports_reasoning(model=model, custom_llm_provider="fireworks_ai"):
+        if self._get_model_cost_capability_exact(model=model, capability="supports_reasoning") or supports_reasoning(
+            model=model, custom_llm_provider="fireworks_ai"
+        ):
             supported_params.append("reasoning_effort")
             supported_params.append("reasoning_history")
             supported_params.append("thinking")
@@ -500,6 +511,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 m = cast(dict, message)
                 m.pop("provider_specific_fields", None)
                 m.pop("thinking_blocks", None)
+                m.pop("reasoning_content", None)
 
         return messages
 
@@ -627,12 +639,10 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         litellm_params: dict,
         headers: dict,
     ) -> dict:
-        if not model.startswith("accounts/") and "#" not in model:
-            if model.endswith("-fast"):
-                model = f"accounts/fireworks/routers/{model}"
-            else:
-                model = f"accounts/fireworks/models/{model}"
-        messages = self._transform_messages_helper(messages=messages, model=model, litellm_params=litellm_params)
+        resolved_model: Final = resolve_fireworks_resource_name(model)
+        messages = self._transform_messages_helper(
+            messages=messages, model=resolved_model, litellm_params=litellm_params
+        )
         if "tools" in optional_params and optional_params["tools"] is not None:
             tools: Final = self._transform_tools(tools=optional_params["tools"])
             optional_params["tools"] = tools
@@ -646,7 +656,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     "include_usage": True,
                 }
         return super().transform_request(
-            model=model,
+            model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -688,7 +698,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
