@@ -1,6 +1,8 @@
 import { Setter } from "@/types";
 import { useEffect, useState } from "react";
 import { keyListCall, Member, Organization } from "../networking";
+import type { ObjectPermission } from "../object_permission_types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./ModelMaxBudgetEditor";
 
 export interface Team {
   team_id: string;
@@ -10,16 +12,25 @@ export interface Team {
   budget_duration: string | null;
   tpm_limit: number | null;
   rpm_limit: number | null;
+  tpd_limit?: number | null;
   organization_id: string;
+  metadata?: Record<string, unknown> | null;
+  budget_reset_at?: string | null;
+  blocked?: boolean;
   created_at: string;
+  updated_at?: string | null;
   keys: KeyResponse[];
   keys_count?: number;
+  members_count?: number;
   members_with_roles: Member[];
+  team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
   access_group_models?: string[];
   access_group_mcp_server_ids?: string[];
   access_group_agent_ids?: string[];
+  // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
+  organization_models?: string[] | null;
 }
 
 export interface KeyResponse {
@@ -28,6 +39,7 @@ export interface KeyResponse {
   key_name: string;
   key_alias: string;
   spend: number;
+  total_spend: number;
   max_budget: number;
   expires: string;
   models: string[];
@@ -40,22 +52,28 @@ export interface KeyResponse {
   metadata: Record<string, unknown>;
   tpm_limit: number;
   rpm_limit: number;
+  tpd_limit?: number | null;
   duration: string;
   budget_duration: string;
   budget_reset_at: string;
   allowed_cache_controls: string[];
   allowed_routes: string[];
+  key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
-  model_max_budget: Record<string, number>;
+  model_max_budget: ModelMaxBudget;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
   soft_budget_cooldown: boolean;
   blocked: boolean;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
   org_id?: string | null;
   created_at: string;
   created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;
@@ -87,16 +105,10 @@ export interface KeyResponse {
   user_tpm_limit: number;
   user_rpm_limit: number;
   user_email: string;
-  object_permission?: {
-    object_permission_id: string;
-    mcp_servers: string[];
-    mcp_access_groups?: string[];
-    mcp_tool_permissions?: Record<string, string[]>;
-    vector_stores: string[];
-    agents?: string[];
-    agent_access_groups?: string[];
-  };
+  object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
+  budget_fallbacks?: Record<string, string[]>;
+  router_settings?: Record<string, unknown> | null;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
@@ -165,9 +177,7 @@ const useKeyList = ({
 
   const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
     try {
-      console.log("calling fetchKeys");
       if (!accessToken) {
-        console.log("accessToken", accessToken);
         return;
       }
       setIsLoading(true);
@@ -188,7 +198,6 @@ const useKeyList = ({
         null,
         expand.join(","),
       );
-      console.log("data", data);
       setKeyData(data);
       setError(null);
     } catch (err) {
@@ -200,16 +209,6 @@ const useKeyList = ({
 
   useEffect(() => {
     fetchKeys();
-    console.log(
-      "selectedTeam",
-      selectedTeam,
-      "currentOrg",
-      currentOrg,
-      "accessToken",
-      accessToken,
-      "selectedKeyAlias",
-      selectedKeyAlias,
-    );
   }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
 
   const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {

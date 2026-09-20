@@ -193,8 +193,10 @@ class TestVoyageMultimodalEmbeddings:
 
         monkeypatch.setattr(module, "get_secret_str", lambda name: None)
         config = VoyageMultimodalEmbeddingConfig()
-        with pytest.raises(ValueError) as exc_info:
-            config.validate_environment({}, "voyage-multimodal-3.5", [], {}, {}, api_key=None)
+        with pytest.raises(ValueError, match='Voyage API key is required for multimodal embeddings\\. Set') as exc_info:
+            config.validate_environment(
+                {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
+            )
         assert "VOYAGE_API_KEY" in str(exc_info.value)
 
     def test_normalize_image_url_dict_missing_url_raises(self):
@@ -203,7 +205,7 @@ class TestVoyageMultimodalEmbeddings:
         )
 
         config = VoyageMultimodalEmbeddingConfig()
-        with pytest.raises(ValueError) as exc_info:
+        with pytest.raises(ValueError, match='Voyage multimodal embeddings require a non-empty') as exc_info:
             config._normalize_content_item({"type": "image_url", "image_url": {}})
         assert "image_url" in str(exc_info.value)
 
