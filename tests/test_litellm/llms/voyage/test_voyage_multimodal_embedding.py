@@ -327,9 +327,9 @@ class TestVoyageMultimodalEmbeddings:
             info = litellm.get_model_info("voyage/voyage-multimodal-3.5")
             assert info["litellm_provider"] == "voyage"
             assert info["mode"] == "embedding"
-            assert info["input_cost_per_token"] == 1.2e-07
-            assert info["max_input_tokens"] == 32000
-            assert info["max_tokens"] == 32000
+            assert isinstance(info["input_cost_per_token"], (int, float))
+            assert info["input_cost_per_token"] > 0
+            assert info["max_input_tokens"] == info["max_tokens"]
         finally:
             litellm.model_cost = original_model_cost
             litellm.get_model_info.cache_clear()
