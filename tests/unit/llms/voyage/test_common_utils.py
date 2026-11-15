@@ -177,6 +177,7 @@ DETAIL_BODY = json.dumps({"detail": DETAIL_TEXT})
         (DETAIL_BODY, DETAIL_TEXT),
         ("upstream connect error", "upstream connect error"),
         ("", ""),
+        ('{"detail": ""}', '{"detail": ""}'),
         ('{"error": "no detail key"}', '{"error": "no detail key"}'),
         ('{"detail": [{"msg": "field required"}]}', '{"detail": [{"msg": "field required"}]}'),
     ],

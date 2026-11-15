@@ -44,8 +44,7 @@ class _VoyageErrorBody(BaseModel):
 
 
 def extract_error_detail(body: str) -> str:
-    """Return the ``detail`` text of a Voyage error body, or the body itself when it has none."""
     try:
-        return _VoyageErrorBody.model_validate_json(body).detail
+        return _VoyageErrorBody.model_validate_json(body).detail or body
     except ValidationError:
         return body

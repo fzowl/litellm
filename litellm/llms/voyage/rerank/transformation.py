@@ -1,5 +1,5 @@
 """
-Transformation logic for VoyageAI by MongoDB's /v1/rerank endpoint.
+Transformation logic for Voyage AI's /v1/rerank endpoint.
 
 Docs - https://docs.voyageai.com/docs/reranker
 """
