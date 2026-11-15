@@ -1,16 +1,9 @@
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional, Protocol
 
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    effective_scan_only_tool_results_for_guardrail,
-    effective_skip_system_message_for_guardrail,
-    effective_skip_tool_message_for_guardrail,
-    request_tools,
-    response_assistant_turn,
-    scoped_structured_message_indices,
-)
+from litellm.litellm_core_utils.core_helpers import has_attributes
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -20,44 +13,12 @@ if TYPE_CHECKING:
         ModifyResponseException,
     )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
-    from litellm.types.utils import GenericGuardrailAPIInputs
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
-@dataclass(frozen=True, slots=True)
-class RequestScanContext:
-    """The scoped request turns and tool definitions a guardrail's request scan sees, in OpenAI chat shape."""
-
-    structured_messages: tuple["AllMessageValues", ...] = ()
-    tools: tuple["ChatCompletionToolParam", ...] = ()
-    conversation_supplied: bool = False
-
-    @staticmethod
-    def scoped(
-        structured_messages: Sequence["AllMessageValues"],
-        tools: Sequence["ChatCompletionToolParam"],
-        guardrail_to_apply: "CustomGuardrail",
-        *,
-        skip_system: bool | None = None,
-    ) -> "RequestScanContext":
-        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        scoped_indices: Final = scoped_structured_message_indices(
-            structured_messages,
-            scan_only_tool_results=scan_only_tool_results,
-            skip_system=(
-                effective_skip_system_message_for_guardrail(guardrail_to_apply) if skip_system is None else skip_system
-            ),
-            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
-        )
-        return RequestScanContext(
-            structured_messages=tuple(structured_messages[index] for index in scoped_indices),
-            tools=() if scan_only_tool_results else tuple(tools),
-            conversation_supplied=bool(structured_messages),
-        )
-
-
-REQUEST_SCAN_CONTEXT_KEY: Final = "litellm_request_scan_context"
+class _ModelDumpable(Protocol):
+    def model_dump(self) -> object: ...
 
 
 @dataclass(slots=True)
@@ -126,7 +87,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Any | None,
+        user_api_key_dict: object,
     ) -> dict[str, object]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
@@ -144,7 +105,11 @@ class BaseTranslation(ABC):
             return {}
 
         # Convert to dict if it's a Pydantic object
-        user_dict = user_api_key_dict.model_dump() if hasattr(user_api_key_dict, "model_dump") else user_api_key_dict
+        user_dict: Final = (
+            user_api_key_dict.model_dump()
+            if has_attributes(user_api_key_dict, _ModelDumpable, "model_dump")
+            else user_api_key_dict
+        )
 
         if not isinstance(user_dict, dict):
             return {}
@@ -166,7 +131,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def merge_user_api_key_metadata_into_request(
-        request_data: dict[str, Any],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
+        request_data: dict[str, object],  # mutable-ok: proxy hooks share and mutate the request payload dict in place
         user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> None:
         """
@@ -230,7 +195,7 @@ class BaseTranslation(ABC):
         request_data: dict | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
-    ) -> Any:
+    ) -> object:
         """
         Process output streaming response with guardrails.
 
@@ -247,6 +212,16 @@ class BaseTranslation(ABC):
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         return None
+
+    def needs_ended_stream_scan(self, guardrail: "CustomGuardrail", responses_so_far: Sequence[object]) -> bool:
+        """Whether the end-of-stream round scans ``guardrail`` even when a sampled round already covered every
+        text, because this translation hands that guardrail marks only the ended round carries."""
+        return False
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        """The chunks a client left the stream with, closed the way this endpoint ends a stream, so the
+        end-of-stream scan also inspects tool calls the stream never finished"""
+        return tuple(responses_so_far)
 
     def build_block_sse_chunks(
         self,
@@ -292,59 +267,16 @@ class BaseTranslation(ABC):
         """
         return None
 
-    def get_structured_messages(self, data: dict) -> list["AllMessageValues"] | None:
+    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list["AllMessageValues"] | None:
         """
         Convert request data to OpenAI-spec structured messages.
 
-        Override in subclasses for format-specific conversion.
+        Override in subclasses for format-specific conversion. ``keep_tool_errors`` copies a provider's
+        tool-failure marker onto tool messages as ``is_error``; only for copies that are never sent to a model.
 
         Returns None if no convertible content is found.
         """
         return None
-
-    def request_scan_context(
-        self, data: Mapping[str, object], guardrail_to_apply: "CustomGuardrail"
-    ) -> RequestScanContext:
-        """Override wherever ``process_input_messages`` scopes or translates the request differently."""
-        structured_messages: Final = self.get_structured_messages(
-            dict(data)  # mutable-ok: get_structured_messages takes the request as a dict
-        )
-        return RequestScanContext.scoped(
-            structured_messages or (), request_tools(data.get("tools")), guardrail_to_apply
-        )
-
-    def with_response_context(
-        self,
-        inputs: "GenericGuardrailAPIInputs",
-        request_data: Mapping[str, object] | None,
-        guardrail_to_apply: "CustomGuardrail",
-    ) -> "GenericGuardrailAPIInputs":
-        """``inputs`` plus the scoped request conversation, closed by the scanned reply, and the request tools."""
-        if request_data is None:
-            return inputs
-        precomputed: Final = request_data.get(REQUEST_SCAN_CONTEXT_KEY)
-        context: Final = (
-            precomputed
-            if isinstance(precomputed, RequestScanContext)
-            else self.request_scan_context(request_data, guardrail_to_apply)
-        )
-        if not context.conversation_supplied:
-            return inputs
-        assistant_turn: Final = response_assistant_turn(inputs.get("texts") or (), inputs.get("tool_calls") or ())
-        contextual_inputs: Final[GenericGuardrailAPIInputs] = {
-            **inputs,
-            "structured_messages": [  # mutable-ok: GenericGuardrailAPIInputs fields are lists
-                *context.structured_messages,
-                *(() if assistant_turn is None else (assistant_turn,)),
-            ],
-        }
-        if not context.tools:
-            return contextual_inputs
-        with_tools: Final[GenericGuardrailAPIInputs] = {
-            **contextual_inputs,
-            "tools": list(context.tools),  # mutable-ok: GenericGuardrailAPIInputs fields are lists
-        }
-        return with_tools
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """

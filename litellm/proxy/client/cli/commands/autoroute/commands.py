@@ -2,6 +2,7 @@ import atexit
 import secrets
 import signal
 import threading
+from collections.abc import Mapping
 from types import FrameType
 from typing import Final
 
@@ -67,7 +68,7 @@ def _ensure_master_key() -> str:
     master_key: Final = secrets.token_urlsafe(32)
     general_settings: Final = generated.get("general_settings")
     updated_settings: Final[dict[str, JsonValue]] = {
-        **(general_settings if isinstance(general_settings, dict) else {}),
+        **(general_settings if isinstance(general_settings, Mapping) else {}),
         "master_key": master_key,
     }
     updated: Final[dict[str, JsonValue]] = {**generated, "general_settings": updated_settings}
@@ -110,7 +111,7 @@ def start(port: int) -> None:
             "lite autoroute start launches a local litellm proxy, which needs the proxy runtime that the "
             f"thin `litellm[cli]` install does not include (missing: {', '.join(missing)}). Install the "
             "proxy runtime with `uv tool install --force 'litellm[proxy]'`, or to QA a branch, "
-            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/scripts/install.sh | "
+            "`curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/<branch>/litellm/scripts/install.sh | "
             "LITELLM_CLI_REF=<branch> sh`."
         )
 

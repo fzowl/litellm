@@ -1,11 +1,15 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, Required, TypedDict, override
+from pydantic import ConfigDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
-from .openai import ChatCompletionToolCallChunk
+from litellm.types.llms.base import LiteLLMBaseModel
+
+from .openai import ChatCompletionFileObjectFile, ChatCompletionImageUrlObject, ChatCompletionToolCallChunk
 
 
 class CachePointBlock(TypedDict, total=False):
@@ -18,8 +22,22 @@ class SystemContentBlock(TypedDict, total=False):
     cachePoint: CachePointBlock
 
 
-class SourceBlock(TypedDict):
-    bytes: str | None  # base 64 encoded string
+class S3Location(TypedDict):
+    uri: ReadOnly[str]
+    bucketOwner: NotRequired[ReadOnly[str]]
+
+
+class SourceBlock(TypedDict, total=False):
+    bytes: ReadOnly[str | None]  # base 64 encoded string
+    s3Location: ReadOnly[S3Location]
+
+
+class S3MediaImageUrlObject(ChatCompletionImageUrlObject, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+class S3MediaFileObjectFile(ChatCompletionFileObjectFile, total=False):
+    bucket_owner: ReadOnly[object]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
@@ -64,6 +82,7 @@ class SearchResultBlock(TypedDict, total=False):
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    video: ReadOnly[VideoBlock]
     searchResult: SearchResultBlock
     json: dict
     text: str
@@ -240,7 +259,7 @@ class ConverseTokenUsageBlock(TypedDict, total=False):
 
 
 class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
+    type: ReadOnly[Literal["priority", "default", "flex", "reserved"]]
 
 
 class ConverseResponseBlock(TypedDict, total=False):
@@ -377,7 +396,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
 
 class PerformanceConfigBlock(TypedDict):
-    latency: Literal["optimized", "throughput"]
+    latency: Literal["standard", "optimized"]
 
 
 class JsonSchemaDefinition(TypedDict, total=False):
@@ -501,6 +520,8 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
     output_dimension: int
+    max_tokens: ReadOnly[int]
+    priority: ReadOnly[int]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -557,7 +578,6 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
-# TwelveLabs Marengo Embed types
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
@@ -1007,13 +1027,21 @@ else:
     AWSPreparedRequest = Any
 
 
+@dataclass(frozen=True)
+class BearerPreparedRequest:
+    method: str
+    url: str
+    headers: Mapping[str, str]
+    body: bytes
+
+
 class BedrockPreparedRequest(TypedDict):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -1081,6 +1109,7 @@ class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3BucketOwner: NotRequired[ReadOnly[str]]
 
 
 class BedrockInputDataConfig(TypedDict):
@@ -1094,6 +1123,7 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
 
     s3Uri: str
     s3EncryptionKeyId: str | None
+    s3BucketOwner: ReadOnly[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -1110,6 +1140,26 @@ class BedrockTag(TypedDict):
 class AwsSessionTag(TypedDict):
     Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
     Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
+class AwsAuthParams(LiteLLMBaseModel):
+    """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
+    aws_session_tags: object = None
+
+
+AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
@@ -1215,6 +1265,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: list
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`
@@ -1222,6 +1273,13 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # supported subset and strips the field entirely when nothing remains, so
     # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
     context_management: dict
+
+    # `compaction` ({"type": "summarize", "instructions"?: str}) is the
+    # `compact-2026-09-04` beta: one summarization call that returns a single
+    # signed compaction block. Bedrock rejects it together with
+    # `context_management`. Ref:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    compaction: ReadOnly[Mapping[str, object]]
 
 
 class BedrockBatchRecordKind(Enum):
