@@ -150,7 +150,8 @@ class TestVoyageMultimodalEmbeddings:
 
         config = VoyageMultimodalEmbeddingConfig()
         assert config.get_supported_openai_params("voyage-multimodal-3.5") == [
-            "dimensions"
+            "dimensions",
+            "encoding_format",
         ]
         optional_params = config.map_openai_params(
             {"dimensions": 512}, {}, "voyage-multimodal-3.5", False
@@ -159,6 +160,21 @@ class TestVoyageMultimodalEmbeddings:
         assert (
             config.map_openai_params({}, {}, "voyage-multimodal-3.5", False) == {}
         )
+
+    @pytest.mark.parametrize(
+        ("encoding_format", "expected"),
+        [("base64", {"output_encoding": "base64"}), ("float", {})],
+    )
+    def test_map_openai_params_encoding_format(self, encoding_format, expected):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        optional_params = VoyageMultimodalEmbeddingConfig().map_openai_params(
+            {"encoding_format": encoding_format}, {}, "voyage-multimodal-3.5", False
+        )
+
+        assert optional_params == expected
 
     def test_validate_environment_uses_api_key(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
@@ -256,7 +272,7 @@ class TestVoyageMultimodalEmbeddings:
             custom_llm_provider="voyage",
             request_type="embeddings",
         )
-        assert multimodal_params == ["dimensions"]
+        assert multimodal_params == ["dimensions", "encoding_format"]
 
         standard_params = get_supported_openai_params(
             model="voyage-3.5",

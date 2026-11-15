@@ -239,6 +239,19 @@ class TestVoyageRerankTransform:
 
         assert "Unauthorized" in str(exc_info.value)
 
+    def test_transform_rerank_response_error_status_unwraps_detail(self):
+        raw_response = httpx.Response(400, json={"detail": "Model rerank-nonexistent is not supported."})
+
+        with pytest.raises(Exception) as exc_info:
+            self.config.transform_rerank_response(
+                model=self.model,
+                raw_response=raw_response,
+                model_response=RerankResponse(),
+                logging_obj=MagicMock(),
+            )
+
+        assert exc_info.value.message == "Model rerank-nonexistent is not supported."
+
     def test_transform_rerank_response_invalid_json(self):
         """Test error handling for invalid JSON response."""
         mock_response = MagicMock(spec=httpx.Response)
@@ -299,7 +312,7 @@ class TestVoyageRerankTransform:
         """Test that validate_environment raises error when API key is missing."""
         for env_var in ("VOYAGE_API_KEY", "VOYAGE_AI_API_KEY", "VOYAGE_AI_TOKEN"):
             monkeypatch.delenv(env_var, raising=False)
-        with pytest.raises(ValueError, match="Voyage AI API key is required"):
+        with pytest.raises(ValueError, match="VoyageAI by MongoDB API key is required"):
             self.config.validate_environment(
                 headers={},
                 model=self.model,

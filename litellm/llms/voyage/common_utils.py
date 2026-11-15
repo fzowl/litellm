@@ -4,6 +4,8 @@ Shared helpers for the Voyage (VoyageAI by MongoDB) provider.
 
 from typing import Final
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
 from litellm.secret_managers.main import get_secret_str
 
 VOYAGE_API_BASE: Final = "https://api.voyageai.com/v1"
@@ -33,3 +35,16 @@ def get_default_base_url(api_key: str | None = None) -> str:
     if resolved is not None and resolved.startswith(MONGODB_API_KEY_PREFIX):
         return MONGODB_API_BASE
     return VOYAGE_API_BASE
+
+
+class _VoyageErrorBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    detail: str
+
+
+def extract_error_detail(body: str) -> str:
+    try:
+        return _VoyageErrorBody.model_validate_json(body).detail or body
+    except ValidationError:
+        return body

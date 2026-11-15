@@ -14,7 +14,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
+from litellm.llms.voyage.common_utils import extract_error_detail, get_default_base_url, get_voyage_api_key
 from litellm.types.rerank import (
     RerankBilledUnits,
     RerankResponse,
@@ -108,7 +108,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         litellm_params: dict = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
-            raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
+            raise VoyageError(message=extract_error_detail(raw_response.text), status_code=raw_response.status_code)
 
         logging_obj.post_call(original_response=raw_response.text)
 
@@ -162,7 +162,9 @@ class VoyageRerankConfig(BaseRerankConfig):
     ) -> dict:
         resolved_api_key: Final = get_voyage_api_key(api_key)
         if resolved_api_key is None:
-            raise ValueError("Voyage AI API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var.")
+            raise ValueError(
+                "VoyageAI by MongoDB API key is required. Set via `api_key` parameter or `VOYAGE_API_KEY` env var."
+            )
         self._api_key = resolved_api_key
         return {
             "Authorization": f"Bearer {resolved_api_key}",
@@ -189,4 +191,4 @@ class VoyageRerankConfig(BaseRerankConfig):
         return model_info["input_cost_per_token"] * total_tokens, 0.0
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers):
-        return VoyageError(message=error_message, status_code=status_code, headers=headers)
+        return VoyageError(message=extract_error_detail(error_message), status_code=status_code, headers=headers)

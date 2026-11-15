@@ -6,7 +6,7 @@ containing content blocks, unlike standard Voyage embeddings which use
 /v1/embeddings and a string/list `input` field.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -16,12 +16,19 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
+from litellm.llms.voyage.common_utils import extract_error_detail, get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+
+
+def _voyage_params(non_default_params: Mapping[str, object]) -> Iterator[tuple[str, object]]:
+    if "dimensions" in non_default_params:
+        yield "output_dimension", non_default_params["dimensions"]
+    if non_default_params.get("encoding_format", "float") != "float":
+        yield "output_encoding", non_default_params["encoding_format"]
 
 
 class VoyageMultimodalEmbeddingError(BaseLLMException):
@@ -63,7 +70,7 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         return ensure_api_route(api_base or get_default_base_url(api_key), "multimodalembeddings")
 
     def get_supported_openai_params(self, model: str) -> list:
-        return ["dimensions"]
+        return ["dimensions", "encoding_format"]
 
     def map_openai_params(
         self,
@@ -72,9 +79,10 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        if "dimensions" in non_default_params:
-            optional_params["output_dimension"] = non_default_params["dimensions"]
-        return optional_params
+        return {
+            **_JSON_OBJECT.validate_python(optional_params),
+            **dict(_voyage_params(_JSON_OBJECT.validate_python(non_default_params))),
+        }
 
     def validate_environment(
         self,
@@ -166,4 +174,6 @@ class VoyageMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         return model_response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return VoyageMultimodalEmbeddingError(message=error_message, status_code=status_code, headers=headers)
+        return VoyageMultimodalEmbeddingError(
+            message=extract_error_detail(error_message), status_code=status_code, headers=headers
+        )
