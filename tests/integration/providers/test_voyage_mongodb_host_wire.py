@@ -401,7 +401,7 @@ def test_rerank_without_any_key_fails_before_dialing(isolated: Gateway, forward:
     forward.drain()
     response: Final = _rerank(isolated, deployment)
     assert response.status_code == 500, response.text
-    assert "Voyage AI API key is required" in response.text, response.text
+    assert "VoyageAI by MongoDB API key is required" in response.text, response.text
     assert forward.targets() == ()
 
 

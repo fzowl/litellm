@@ -1,8 +1,11 @@
+import json
+
 import pytest
 
 from litellm.llms.voyage.common_utils import (
     MONGODB_API_BASE,
     VOYAGE_API_BASE,
+    extract_error_detail,
     get_default_base_url,
     get_voyage_api_key,
 )
@@ -162,3 +165,38 @@ def test_get_voyage_api_key_prefers_env_vars_in_documented_order(monkeypatch):
     monkeypatch.setenv("VOYAGE_API_KEY", "first")
     assert get_voyage_api_key() == "first"
     assert get_voyage_api_key("explicit") == "explicit"
+
+
+DETAIL_TEXT = "Model voyage-nonexistent-9 is not supported."
+DETAIL_BODY = json.dumps({"detail": DETAIL_TEXT})
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (DETAIL_BODY, DETAIL_TEXT),
+        ("upstream connect error", "upstream connect error"),
+        ("", ""),
+        ('{"error": "no detail key"}', '{"error": "no detail key"}'),
+        ('{"detail": [{"msg": "field required"}]}', '{"detail": [{"msg": "field required"}]}'),
+    ],
+)
+def test_extract_error_detail_unwraps_only_a_string_detail(body, expected):
+    assert extract_error_detail(body) == expected
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        VoyageEmbeddingConfig(),
+        VoyageContextualEmbeddingConfig(),
+        VoyageMultimodalEmbeddingConfig(),
+        VoyageRerankConfig(),
+    ],
+    ids=["embedding", "contextual", "multimodal", "rerank"],
+)
+def test_error_class_carries_the_detail_text_of_a_voyage_error_body(config):
+    error = config.get_error_class(DETAIL_BODY, 400, {})
+
+    assert error.status_code == 400
+    assert error.message == DETAIL_TEXT

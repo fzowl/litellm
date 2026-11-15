@@ -8,7 +8,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
+from litellm.llms.voyage.common_utils import extract_error_detail, get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -134,4 +134,4 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         return model_response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
-        return VoyageError(message=error_message, status_code=status_code, headers=headers)
+        return VoyageError(message=extract_error_detail(error_message), status_code=status_code, headers=headers)
